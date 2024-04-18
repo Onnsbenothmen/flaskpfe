@@ -1,15 +1,17 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask import Flask
 from flask_cors import CORS
+from flask_migrate import Migrate
 
 app = Flask(__name__)
 CORS(app)
 
-db = SQLAlchemy()
+
+# Configuration de l'URL de la base de données
 app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://user:postgres@localhost:5432/postgres"
-#cors = CORS(app, resources={r"/": {"origins": "http://localhost:3000"}})
-db.init_app(app)
 
+# Initialisation de l'instance SQLAlchemy avec l'application Flask
+db = SQLAlchemy(app)
 
-
-
+# Initialisation de Flask-Migrate avec l'application Flask et l'instance SQLAlchemy
+migrate = Migrate(app, db)
