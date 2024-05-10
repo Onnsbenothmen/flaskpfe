@@ -15,7 +15,7 @@ class Users(db.Model):
     profile_image = db.Column(db.String(250))  # Champ pour l'image de profil
     role_id = db.Column(db.Integer, db.ForeignKey("Role.id"))
     role = db.relationship('Role', back_populates='users')
-    programmes_visite = db.relationship('ProgrammeVisite', back_populates='users', cascade='all, delete-orphan')
+    programmes_visite = db.relationship('ProgrammeVisite', back_populates='user', cascade='all, delete-orphan')
     phoneNumber = db.Column(db.String(20), nullable=True)  # Nouveau champ pour le numéro de téléphone
     address = db.Column(db.String(255), nullable=True)  # Nouveau champ pour l'adresse
     instance_id = db.Column(db.Integer, db.ForeignKey("instances.id"))
@@ -44,7 +44,7 @@ class Users(db.Model):
             "is_archived": self.is_archived
         }
 
-from . import db
+
 
 class ArchivedUser(db.Model):
     __tablename__ = 'archived_users'
@@ -63,7 +63,6 @@ class Role(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
     description = db.Column(db.String(250))
-
     users = db.relationship('Users', back_populates='role')
     
     def __repr__(self):
@@ -100,7 +99,6 @@ class Instance(db.Model):
             "created_at": self.created_at,
         }
 
-
 class ProgrammeVisite(db.Model):
     __tablename__ = "ProgrammeVisite"
     id = db.Column(db.Integer, primary_key=True)
@@ -112,9 +110,12 @@ class ProgrammeVisite(db.Model):
     contacts_urgence = db.Column(db.String(200))  
     documents_joints = db.Column(db.String(500))  
     user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
+    conseiller_email = db.Column(db.String(100), nullable=False)  
+    admin_email = db.Column(db.String(100), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
-    users = db.relationship('Users', back_populates='programmes_visite')
-    resultats = db.relationship('Resultat', back_populates='programme')
+    user = db.relationship('Users', back_populates='programmes_visite')
+    resultat = db.relationship('Resultat', back_populates='programme', uselist=False)  # Nouvelle relation
+    
     
     def serialize(self):
         return {
@@ -127,17 +128,38 @@ class ProgrammeVisite(db.Model):
             'contacts_urgence': self.contacts_urgence,
             'documents_joints': self.documents_joints,
             'created_at': self.created_at.isoformat(),
-        }    
+        }
+        
+        
+    
+    
+        
 class Resultat(db.Model):
     __tablename__ = 'Resultat'
     id = db.Column(db.Integer, primary_key=True)
     observations = db.Column(db.Text, nullable=False)
     evaluations = db.Column(db.Text, nullable=False)
     recommendations = db.Column(db.Text, nullable=False)
-    programme_id = db.Column(db.Integer, db.ForeignKey('ProgrammeVisite.id'))
+    rapportPdf = db.Column(db.LargeBinary)
+    statut = db.Column(db.String(20))
+    programme_id = db.Column(db.Integer, db.ForeignKey('ProgrammeVisite.id'), unique=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
-    programme = db.relationship("ProgrammeVisite", back_populates="resultats")
+    programme = db.relationship("ProgrammeVisite", back_populates="resultat")
+
     
+    def serialize(self):
+        return {
+            'id': self.id,
+            'observations': self.observations,
+            'evaluations': self.evaluations,
+            'recommendations': self.recommendations,
+            'rapportPdf': self.rapportPdf,
+            'statut':self.statut,
+            'user_id': self.user_id,
+            'programme_id': self.programme_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            
+        }
 
 class Reunion(db.Model):
     __tablename__ = 'Reunion'

@@ -1,7 +1,7 @@
 from functools import wraps
 from sqlalchemy.sql import func
 from . import app, db
-from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser
+from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat
 
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt as pyjwt
@@ -33,8 +33,8 @@ from flask import send_from_directory
 
 
 # Définition du dossier de téléchargement des fichiers
-UPLOAD_FOLDER = 'static/uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+UPLOAD_IMAGE = 'static/uploads'
+app.config['UPLOAD_IMAGE'] = UPLOAD_IMAGE
 
 
 jwt = JWTManager(app)
@@ -62,8 +62,8 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://user:postgres@localhost:54
 mail = Mail(app)
 
 # Assurez-vous que le répertoire de téléchargement existe
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(UPLOAD_IMAGE):
+    os.makedirs(UPLOAD_IMAGE)
 
 # Liste des extensions de fichiers autorisées
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
@@ -125,7 +125,7 @@ def signup():
 
     if avatar and allowed_file(avatar.filename):
         filename = secure_filename(avatar.filename)
-        avatar.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        avatar.save(os.path.join(app.config['UPLOAD_IMAGE'], filename))
 
         first_name = request.form.get('firstName')
         last_name = request.form.get('lastName')
@@ -223,17 +223,24 @@ def president_dashboard(current_user):
         return make_response({'message': 'Permission denied'}, 403)
     # Logique pour le tableau de bord du président
 
+@app.route("/superAdmin_dashboard")
+@token_required
+def superAdmin_dashboard(current_user):
+    if current_user.role.name != 'super admin':
+        return make_response({'message': 'Permission denied'}, 403)
+    
 @app.route("/admin_dashboard")
 @token_required
 def admin_dashboard(current_user):
-    if current_user.role.name != 'admin':
+    if current_user.role.name != 'adminPublique':
         return make_response({'message': 'Permission denied'}, 403)
+
 
 
 @app.route("/conseille")
 @token_required
 def conseille_dashboard(current_user):
-    if current_user.role.name != 'Conseille Local':
+    if current_user.role.name != 'conseiller':
         return make_response({'message': 'Permission denied'}, 403)
 
 
@@ -248,8 +255,8 @@ def user_image(user_id):
         )
     return 'Image non trouvée', 404
 
-@app.route("/users", methods=["GET"])
-def get_all_users():
+@app.route("/Allusers", methods=["GET"])
+def users():
     try:
         role_name = request.args.get('role')
         if role_name:
@@ -289,7 +296,7 @@ def update_user(user_id):
             file = request.files['file']
             if file and allowed_file(file.filename):
                 filename = secure_filename(file.filename)
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                file.save(os.path.join(app.config['UPLOAD_IMAGE'], filename))
 
                 # Mettre à jour le chemin de l'image de profil dans la base de données
                 user.profile_image = filename
@@ -395,7 +402,7 @@ def update_profile(user_id):
             return jsonify({"message": "No file selected for uploading"}), 400
         if image and allowed_file(image.filename):
             filename = secure_filename(image.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            filepath = os.path.join(app.config['UPLOAD_IMAGE'], filename)
             image.save(filepath)
             user.profile_image = filename
             print(f"Image '{filename}' saved successfully in the database.")
@@ -799,6 +806,268 @@ def reset_password():
         return jsonify({'message': 'Mot de passe réinitialisé avec succès'}), 200
     else:
         return jsonify({'message': 'Adresse e-mail ou code de vérification incorrect'}), 400
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# -------------------------------------------creer visite d'evaluation-----------------------------------------
+
+
+
+@app.route('/user_info', methods=['GET'])
+def get_user_info():
+    email = request.args.get('email')
+    user = Users.query.filter_by(email=email).first()
+    if user:
+        return jsonify({'firstName': user.firstName, 'lastName': user.lastName}), 200
+    else:
+        return jsonify({'error': 'Utilisateur non trouvé'}), 404
+
+
+
+# Routes Flask
+@app.route("/users", methods=["GET"])
+def get_all_users():
+    try:
+        role_name = request.args.get('role')
+        if role_name:
+            users = Users.query.join(Role).filter(Role.name == role_name).all()
+        else:
+            users = Users.query.all()
+         
+        serialized_users = [user.serialize() for user in users]
+        return jsonify(serialized_users), 200
+    except Exception as e:
+        print(e)
+        return make_response({"message": f"Erreur: {str(e)}"}, 500)
+
+
+# ------------------------------------------------------------------------------
+
+from sqlalchemy import or_
+
+
+@app.route('/programme_visite', methods=['POST'])
+def create_programme_visite():
+    data = request.get_json()
+    conseiller_emails = data.get('conseiller_email')  # Liste des e-mails des conseillers
+    users = Users.query.filter(or_(*[Users.email == email for email in conseiller_emails])).all()
+    
+    if users:
+        for user in users:
+            new_programme = ProgrammeVisite(
+                periode_debut=data['periode_debut'],
+                periode_fin=data['periode_fin'],
+                criteres_evaluation=data['criteres_evaluation'],
+                lieu=data['lieu'],
+                description=data['description'],
+                contacts_urgence=data['contacts_urgence'],
+                user_id=user.id,
+                conseiller_email=user.email,
+                admin_email=data['admin_email']
+            )
+            db.session.add(new_programme)
+        
+        db.session.commit()
+        return jsonify({"message": "Programme de visite créé avec succès "}), 201
+    else:
+        return jsonify({"message": "Aucun utilisateur trouvé"}), 404
+
+
+
+
+
+# # Configuration de Flask-Mail
+# app.config['SECRET_KEY'] = "tsfyguaistyatuis589566875623568956"
+# app.config['MAIL_SERVER'] = "smtp.googlemail.com"
+# app.config['MAIL_PORT'] = 587
+# app.config['MAIL_USE_TLS'] = True
+# app.config['MAIL_USERNAME'] = "nourgarali12345@gmail.com"
+# app.config['MAIL_PASSWORD'] = "tmok wtxn cbia xobx"
+
+#mail = Mail(app)
+
+#from flask_mail import Message
+
+@app.route('/send_email', methods=['POST'])
+def send_email():
+    try:
+        data = request.json
+        conseillers = data['conseillers']
+        emailData = data['emailData']
+        subject = emailData['subject']
+        content = emailData['content']
+
+        # Envoi de l'e-mail à chaque conseiller
+        for conseiller in conseillers:
+            msg = Message(subject, sender=app.config['MAIL_USERNAME'], recipients=[conseiller])
+            msg.body = content
+            mail.send(msg)
+
+        return jsonify({'message': 'E-mails envoyés avec succès'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/ListeVisiteEvaluation', methods=['GET'])
+def get_programmes_visite():
+    try:
+        conseiller_nom = request.args.get('nom')
+        conseiller_prenom = request.args.get('prenom')
+
+        if conseiller_nom and conseiller_prenom:
+            # Recherche de l'utilisateur par nom et prénom (conseiller)
+            user = Users.query.filter_by(firstName=conseiller_nom, lastName=conseiller_prenom).first()
+            if user:
+                # Récupération des programmes de visite associés à l'utilisateur
+                programmes_visite = ProgrammeVisite.query.filter_by(user_id=user.id).all()
+                # Sérialisation des programmes en JSON
+                programmes_visite_json = [programme.serialize() for programme in programmes_visite]
+                return jsonify(programmes_visite_json), 200
+            else:
+                return jsonify([]), 404
+        else:
+            # Si aucun conseiller n'est spécifié, renvoyer tous les programmes de visite
+            programmes_visite = ProgrammeVisite.query.all()
+            programmes_visite_json = [programme.serialize() for programme in programmes_visite]
+            return jsonify(programmes_visite_json), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    
+    
+    
+from flask import jsonify, request
+import requests  # Ajoutez cette ligne pour importer le module requests
+
+
+@app.route('/conseillers')
+def get_conseillers():
+    conseillers = Users.query.join(Role).filter(Role.name == 'conseiller').all()
+    return jsonify([conseiller.serialize() for conseiller in conseillers])
+
+ # ----------------------------------------------fonction correct ----------------------------------
+    
+
+
+# Définir une route pour lister les programmes de visite d'un conseiller
+@app.route('/conseillers/<string:nom>/<string:prenom>/programmes_visite', methods=['GET'])
+def lister_programmes_visite_conseiller(nom, prenom):
+    # Recherche de l'utilisateur par nom et prénom
+    user = Users.query.filter_by(firstName=nom, lastName=prenom).first()
+    if user:
+        # Récupération des programmes de visite associés à l'utilisateur
+        programmes = ProgrammeVisite.query.filter_by(user_id=user.id).all()
+        # Sérialisation des programmes en JSON
+        programmes_json = [programme.serialize() for programme in programmes]
+        return jsonify(programmes_json)
+    else:
+        return jsonify([])  # Retourner une liste vide si l'utilisateur n'est pas trouvé
+
+
+
+from flask import send_file
+from io import BytesIO
+from reportlab.pdfgen import canvas
+
+from reportlab.lib.pagesizes import letter
+
+UPLOAD_FOLDER = 'static/pdfRapport'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+@app.route('/evaluation/<int:programme_id>', methods=['POST'])
+def submit_evaluation(programme_id):
+    data = request.json
+
+    # Extrait les données de l'évaluation depuis le JSON
+    observations = data.get('observations')
+    evaluations = data.get('evaluations')
+    recommendations = data.get('recommendations')
+
+    # Enregistre l'évaluation dans la base de données
+    try:
+        new_evaluation = Resultat(
+            programme_id=programme_id,
+            observations=observations,
+            evaluations=evaluations,
+            recommendations=recommendations
+        )
+        db.session.add(new_evaluation)
+        db.session.commit()
+
+        # Initialise pdf_io
+        pdf_io = BytesIO()
+
+        # Crée le PDF en utilisant pdf_io comme fichier en mémoire
+        p = canvas.Canvas(pdf_io)
+        p.drawString(100, 750, f"Observations: {observations}")
+        p.drawString(100, 735, f"Évaluations: {evaluations}")
+        p.drawString(100, 720, f"Recommandations: {recommendations}")
+        p.showPage()
+        p.save()
+
+        # Sauvegarde le PDF sur le serveur
+        pdf_filename = f"evaluation_{programme_id}.pdf"
+        pdf_io.seek(0)
+        with open(os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename), 'wb') as f:
+            f.write(pdf_io.read())
+
+        # Retourne le PDF comme réponse
+        pdf_io.seek(0)
+        response = make_response(pdf_io.getvalue())
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = 'attachment; filename=rapport_evaluation.pdf'
+        return response
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+    
+    
+    
+    
+from flask import send_from_directory
+
+@app.route('/programmes_visite/<int:programme_id>/rapport', methods=['GET'])
+def get_programme_rapport(programme_id):
+    try:
+        # Rechercher le programme de visite dans la base de données par son ID
+        programme = ProgrammeVisite.query.get(programme_id)
+        
+        # Vérifier si le programme existe
+        if not programme:
+            return jsonify({'error': 'Programme de visite non trouvé'}), 404
+        
+        # Vérifier si le fichier PDF existe sur le serveur
+        pdf_filename = f"evaluation_{programme_id}.pdf"
+        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+        if not os.path.exists(pdf_path):
+            return jsonify({'error': 'Rapport PDF introuvable'}), 404
+        
+        # Retourner le PDF en tant que fichier
+        return send_from_directory(app.config['UPLOAD_FOLDER'], pdf_filename, as_attachment=True)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    
+    
+    
+    
+
+
 
 
 
