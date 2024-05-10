@@ -1,7 +1,7 @@
 from functools import wraps
 from sqlalchemy.sql import func
 from . import app, db
-from .models import Users, Instance, Role,AdminPublique,ProgrammeVisite, ProgrammeConseiller,ProgrammeAdmin,ConseillerLocal,db
+from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt as pyjwt
 from datetime import datetime, timezone, timedelta
@@ -12,11 +12,9 @@ from flask_jwt_extended import jwt_required, create_access_token, JWTManager, ge
 import json
 from flask import Flask, jsonify, request, make_response,redirect, url_for
 from flask_cors import CORS
-from flask import Flask, jsonify, request, make_response, flash
+from flask import Flask, jsonify, request, make_response, flash,send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from .models import ConseillerLocal, db, AdminPublique,Users, ProgrammeVisite, ProgrammeConseiller,ProgrammeAdmin,Resultat
-
 from flask_sqlalchemy import SQLAlchemy
 import jwt
 from email.mime.multipart import MIMEMultipart
@@ -24,9 +22,13 @@ from email.mime.text import MIMEText
 import smtplib
 from . import models
 from . import app
+from io import BytesIO
 
-app = Flask(__name__)
-CORS(app)
+from flask import send_from_directory
+
+
+#app = Flask(__name__)
+#CORS(app)
 
 
 # Définition du dossier de téléchargement des fichiers
@@ -53,7 +55,7 @@ app.config['MAIL_DEFAULT_SENDER'] = 'your-email@example.com'  # Adresse e-mail p
 app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://user:postgres@localhost:5432/postgres"
 
 # Initialise la base de données
-db.init_app(app)
+#db.init_app(app)
 
 # Initialisation de Flask-Mail
 mail = Mail(app)
@@ -68,48 +70,6 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 # Fonction pour vérifier si l'extension du fichier est autorisée
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-
-# Route pour l'inscription d'un nouvel utilisateur administrateur
-@app.route('/signup_admin', methods=['POST'])
-def signup_admin():
-    # Vérifier si une image est présente dans la requête
-    if 'file' not in request.files:
-        return jsonify({"message": "No file part"}), 400
-    
-    file = request.files['file']
-    # Vérifier si un fichier a été sélectionné pour le téléchargement
-    if file.filename == '':
-        return jsonify({"message": "No image selected for uploading"}), 400
-    
-    # Vérifier si les données de formulaire sont présentes
-    if 'firstName' not in request.form or 'lastName' not in request.form or 'email' not in request.form or 'password' not in request.form or 'directeur' not in request.form:
-        return jsonify({"message": "Missing form data"}), 400
-    
-    # Extraire les données du formulaire
-    firstName = request.form['firstName']
-    lastName = request.form['lastName']
-    password = request.form['password']
-    email = request.form['email']
-    directeur = request.form['directeur']
-    
-    # Enregistrer le fichier sur le serveur
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        
-        # Hasher le mot de passe avant de l'enregistrer dans la base de données
-        hashed_password = generate_password_hash(password)
-        
-        # Créer un nouvel utilisateur avec les données du formulaire et le nom de fichier de l'image
-        new_President = AdminPublique(firstName=firstName, lastName=lastName, password=hashed_password, email=email, directeur=directeur, profile_image=filename)
-        db.session.add(new_President)
-        db.session.commit()
-
-        return jsonify({"message": "President created successfully"}), 200
-    else:
-        return jsonify({"message": "Allowed image types are - png, jpg, jpeg, gif"}), 400
 
 # Fonction pour vérifier le token JWT dans les requêtes
 def token_required(f):
@@ -195,10 +155,13 @@ def login():
     email = auth.get("email")  # Récupérer l'email de la requête
     password = auth.get("password")  # Récupérer le mot de passe de la requête
 
+    # Afficher les données de connexion dans la console
+    print(f"Email: {email}, Password: {password}")
+
     # Recherche de l'utilisateur dans la base de données par son email
     user = Users.query.filter_by(email=email).first()
     if not user:
-        return make_response({"message": "Utilisateur non trouvé"}, 404)
+        return jsonify({"message": "Utilisateur non trouvé"}), 404
 
     # Vérification du mot de passe
     if check_password_hash(user.password, password):
@@ -207,15 +170,27 @@ def login():
             'role': user.role.name if user.role else None,
             'email': user.email,
             'firstName': user.firstName,
-            'lastName': user.lastName
+            'lastName': user.lastName,
+            "phoneNumber": user.phoneNumber,
+            "address": user.address,
+            "profile_image": user.profile_image       # On renvoie les données binaires de l'image de profil
         }
+        if user.role.name == 'président':
+            title = 'Ajouter un utilisateur'
+        else:
+            title = 'Ajouter président'
         token = create_access_token(identity=token_payload)  # Générer le token JWT
-
+        
         # Retourner les informations du profil de l'utilisateur avec le token d'accès
         return jsonify({"token": token, "profile": token_payload}), 200
     else:
         # Si les identifiants ne correspondent pas, renvoyer un message d'erreur
-        return make_response({'message': 'Veuillez vérifier vos identifiants'}, 401)
+        return jsonify({'message': 'Veuillez vérifier vos identifiants'}), 401
+
+
+@app.route('/images/<filename>')
+def uploaded_file(filename):
+    return send_from_directory('C:/Users/Ons/Pictures', filename)
 
 @app.route("/logout")
 def logout():
@@ -228,7 +203,7 @@ def logout():
 @app.route("/president_dashboard")
 @token_required
 def president_dashboard(current_user):
-    if current_user.role.name != 'president':
+    if current_user.role.name != 'président':
         return make_response({'message': 'Permission denied'}, 403)
     # Logique pour le tableau de bord du président
 
@@ -237,23 +212,44 @@ def president_dashboard(current_user):
 def admin_dashboard(current_user):
     if current_user.role.name != 'admin':
         return make_response({'message': 'Permission denied'}, 403)
-    # Logique pour le tableau de bord de l'admin
+
+
+@app.route("/conseille")
+@token_required
+def conseille_dashboard(current_user):
+    if current_user.role.name != 'Conseille Local':
+        return make_response({'message': 'Permission denied'}, 403)
+
+
+@app.route('/user_image/<int:user_id>')
+def user_image(user_id):
+    user = Users.query.get(user_id)
+    if user and user.profile_image:
+        return send_file(
+            BytesIO(user.profile_image),
+            attachment_filename='profile_image.png',
+            mimetype='image/png'
+        )
+    return 'Image non trouvée', 404
 
 @app.route("/users", methods=["GET"])
 def get_all_users():
     try:
-        # Récupération de tous les utilisateurs de la base de données
-        users = Users.query.all()
-
-        # Sérialisation des données des utilisateurs
-        serialized_users = [user.serialize() for user in users]
-
-        return jsonify({"data": serialized_users}), 200
-
+        role_name = request.args.get('role')
+        if role_name:
+            users = Users.query.join(Role).filter(Role.name == role_name).all()
+            if role_name == 'président':
+                serialized_users = [{"email": user.email} for user in users]
+            else:
+                serialized_users = [user.serialize() for user in users]
+            return jsonify({"data": serialized_users}), 200
+        else:
+            users = Users.query.all()
+            serialized_users = [user.serialize() for user in users]
+            return jsonify({"data": serialized_users}), 200
     except Exception as e:
         print(e)
         return make_response({"message": f"Erreur: {str(e)}"}, 500)
-# ...
 
 @app.route("/users/<int:user_id>", methods=["PUT"])
 def update_user(user_id):
@@ -295,65 +291,7 @@ def update_user(user_id):
         db.session.rollback()
         return make_response({"message": "Unable to update user"}, 500)
 
-@app.route('/profile/<user_email>')
-@jwt_required()
-def my_profile(user_email):
-    current_user_email = get_jwt_identity()
-    if user_email != current_user_email:
-        return jsonify({"error": "Unauthorized Access"}), 401
-    
-    user = User.query.filter_by(email=user_email).first()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    
-    response_body = {
-        "id": user.id,
-        "firstName": user.firstName,
-        "lastName": user.lastName,
-        "email": user.email,
-        "phoneNumber": user.phoneNumber,
-        "address": user.address,
-        "profile_image": user.profile_image
-    }
-    return jsonify(response_body), 200
 
-@app.route('/profiles', methods=['GET'])
-@jwt_required()
-def all_profiles():
-    current_user_email = get_jwt_identity()
-    
-    users = User.query.all()
-    profiles = []
-    
-    for user in users:
-        profile = {
-            "id": user.id,
-            "firstName": user.firstName,
-            "lastName": user.lastName,
-            "email": user.email,
-            "phoneNumber": user.phoneNumber,
-            "address": user.address,
-            "profile_image": user.profile_image
-        }
-        profiles.append(profile)
-    
-    return jsonify(profiles), 200
-
-@app.route('/user_profile')
-def user_profile():
-    # Récupérez les données de l'utilisateur depuis la base de données
-    user = Users.query.filter_by(id=current_user_id).first()  # Assurez-vous de remplacer current_user_id par l'ID de l'utilisateur connecté
-
-    # Renvoyez les données de l'utilisateur au format JSON
-    return jsonify({
-        "id": user.id,
-        "firstName": user.firstName,
-        "lastName": user.lastName,
-        "email": user.email,
-        "phoneNumber": user.phoneNumber,
-        "address": user.address,
-        "profile_image": user.profile_image
-    })
 
 @app.route('/update_profile/<int:user_id>', methods=['PUT'])
 def update_profile(user_id):
@@ -420,31 +358,39 @@ def delete_user(user_id):
 
 @app.route("/addInstances", methods=["POST"])
 def addInstance():
-    data = request.json
-    president_email = data.get("president_email")
-    council_name = data.get("council_name")
-    ville = data.get("ville")  # Récupérez la ville depuis les données JSON
-    active = data.get("active")
-    created_at = data.get("created_at")
+    try:
+        data = request.json
+        president_email = data.get("president_email")
+        instance_name = data.get("instance_name")  # Modifier le nom de la variable pour refléter le changement
+        ville = data.get("ville")  # Récupérez la ville depuis les données JSON
+        active = data.get("active")
+        created_at = data.get("created_at")
 
-    if president_email and council_name and ville:  # Assurez-vous que tous les champs requis sont présents
-        instance = Instance.query.filter_by(president_email=president_email).first()
-        if instance:
-            return make_response({"message": "Instance already exists"}, 200)
+        if president_email and instance_name and ville:  # Assurez-vous que tous les champs requis sont présents
+            instance = Instance.query.filter_by(president_email=president_email).first()
+            if instance:
+                return make_response({"message": "Instance already exists"}, 200)
 
-        # Créez une nouvelle instance avec la ville
-        new_instance = Instance(
-            president_email=president_email,
-            council_name=council_name,
-            ville=ville,
-            active=active if active is not None else True,
-            created_at=created_at
-        )
-        db.session.add(new_instance)
-        db.session.commit()
-        return make_response({"message": "Instance Created"}, 201)
+            # Créez une nouvelle instance avec la ville
+            new_instance = Instance(
+                president_email=president_email,
+                instance_name=instance_name,  # Utiliser le nouveau nom de l'instance
+                ville=ville,
+                active=active if active is not None else True,
+                created_at=created_at
+            )
+            db.session.add(new_instance)
+            db.session.commit()
 
-    return make_response({"message": "Missing required fields"}, 400)
+            # Envoyez un e-mail au président avec le nom de l'instance
+            send_email_to_president(president_email, instance_name, ville)  # Passer le nom de l'instance
+
+            return make_response({"message": "Instance Created and Email sent to President"}, 201)
+
+        return make_response({"message": "Missing required fields"}, 400)
+    except Exception as e:
+        print(e)
+        return make_response({"message": f"Error: {str(e)}"}, 500)
 
 
 @app.route("/instances", methods=["GET"])
@@ -468,7 +414,7 @@ def update_instance(id):
     instance = Instance.query.get_or_404(id)
     data = request.json
     instance.president_email = data.get('president_email', instance.president_email)
-    instance.council_name = data.get('council_name', instance.council_name)
+    instance.instance_name = data.get('instance_name', instance.instance_name)
     instance.ville = data.get('ville', instance.ville)
     instance.active = data.get('active', instance.active)
     db.session.commit()
@@ -490,6 +436,23 @@ def delete_instance(instance_id):
         print(e)
         db.session.rollback()
         return make_response({"message": f"Unable to delete instance: {str(e)}"}, 500)
+
+def send_email_to_president(president_email, instance_name, ville):
+    try:
+        # Créer le message d'e-mail
+        message = Message(subject="Nouvelle instance créée",
+                          recipients=[president_email],
+                          body=f"Bienvenue Monsieur/Madame le président,\n\n"
+                               f"Une nouvelle instance a été créée pour votre gestion. Les détails sont les suivants :\n\n"
+                               f"Nom de l'instance : {instance_name}\n"
+                               f"Ville : {ville}\n\n"
+                               f"Merci de prendre les mesures nécessaires.\n\n"
+                               f"Cordialement,\nVotre application")
+
+        # Envoyer l'e-mail
+        mail.send(message)  # Assurez-vous d'avoir configuré Flask-Mail correctement dans votre application
+    except Exception as e:
+        print("Error sending email:", e)
 
 
 @app.route("/roles", methods=["POST"])
@@ -586,7 +549,7 @@ def update_role(role_id):
 
 
 
-@app.route("/refresh_token", methods=["POST"])
+""" @app.route("/refresh_token", methods=["POST"])
 def refresh_token():
     try:
         refresh_token = request.json.get("refresh_token")
@@ -602,440 +565,99 @@ def refresh_token():
             return jsonify({"message": "Invalid refresh token"}), 401
     except Exception as e:
         print(e)
-        return jsonify({"message": "Unable to refresh token"}), 5
-
-@app.after_request
-def refresh_expiring_jwts(response):
-    try:
-        exp_timestamp = get_jwt()["exp"]
-        now = datetime.now(timezone.utc)
-        target_timestamp = datetime.timestamp(now + timedelta(minutes=30))
-        if target_timestamp > exp_timestamp:
-            access_token = create_access_token(identity=get_jwt_identity())
-            data = response.get_json()
-            if type(data) is dict:
-                data["access_token"] = access_token 
-                response.data = json.dumps(data)
-        return response
-    except (RuntimeError, KeyError):
-        # Case where there is not a valid JWT. Just return the original respone
-        return response
-
-@app.route("/admins", methods=["GET"])
-def get_all_admins():
-    try:
-        # Fetch all admins
-        admins = AdminPublique.query.order_by(AdminPublique.id).all()
-
-        # Print debug information
-        print("All Admins:", admins)
-
-        # Serialize admin data
-        serialized_admins = [admin.serialize() for admin in admins]  # Call the serialize method
-
-        return jsonify({"data": serialized_admins}), 200
-
-    except Exception as e:
-        print(e)
-        return make_response({"message": f"Error: {str(e)}"}, 500)
+        return jsonify({"message": "Unable to refresh token"}), 5 """
 
 
-@app.route("/adminpublique/<int:admin_id>", methods=["GET"])
-def get_admin(admin_id):
-    try:
-        admin = AdminPublique.query.get(admin_id)
-        if not admin:
-            return make_response({"message": f"Admin with id {admin_id} not found"}, 404)
+@app.route('/api/change-password', methods=['POST'])
+def change_password():
+    data = request.json
+    user_id = data.get('userId')
+    current_password = data.get('currentPassword')
+    new_password = data.get('newPassword')
 
-        return jsonify(admin.serialize()), 200
+    user = Users.query.get(user_id)
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
 
-    except Exception as e:
-        print(e)
-        return make_response({"message": "Unable to get admin"}, 500)
+    # Vérifiez si le mot de passe actuel fourni correspond au mot de passe actuel de l'utilisateur
+    if not check_password_hash(user.password, current_password):
+        return jsonify({'message': 'Incorrect current password'}), 400
 
-
-@app.route("/adminpublique/<int:admin_id>", methods=["PUT"])
-def update_admin(admin_id):
-    try:
-        admin = AdminPublique.query.get(admin_id)
-        if not admin:
-            return make_response({"message": f"Admin with id {admin_id} not found"}, 404)
-
-        # Update the admin fields
-        admin.firstName = request.form.get('firstName')
-        admin.lastName = request.form.get('lastName')
-        admin.email = request.form.get('email')
-        admin.directeur = request.form.get('directeur')
-
-        # Check if a file was uploaded in the request
-        if 'file' in request.files:
-            file = request.files['file']
-            if file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-
-                # Update the profile image path in the database
-                admin.profile_image = filename
-
-        db.session.commit()
-
-        return jsonify({"message": "Admin updated successfully"}), 200
-
-    except Exception as e:
-        print(e)
-        db.session.rollback()
-        return make_response({"message": "Unable to update admin"}, 500)
-
-@app.route("/adminpublique/<int:admin_id>", methods=["DELETE"])
-def delete_admin(admin_id):
-    try:
-        admin = AdminPublique.query.get(admin_id)
-        if not admin:
-            return make_response({"message": f"Admin with id {admin_id} not found"}, 404)
-
-        db.session.delete(admin)
-        db.session.commit()
-
-        return jsonify({"message": "Admin deleted successfully"}), 200
-
-    except Exception as e:
-        print(e)
-        db.session.rollback()
-        return make_response({"message": "Unable to delete admin"}, 500)
-
-@app.route('/api/conseillers-emails', methods=['GET'])
-def get_conseillers_emails():
-    # Récupérer les emails des conseillers locaux depuis la base de données
-    conseillers = ConseillerLocal.query.all()
-    emails = [conseiller.email for conseiller in conseillers]
-    return jsonify(emails)
-
-@app.route('/api/admins-emails', methods=['GET'])
-def get_admins_emails():
-    # Récupérer les emails des administrateurs publics depuis la base de données
-    admins = AdminPublique.query.all()
-    emails = [admin.email for admin in admins]
-    return jsonify(emails)
-
-
-@app.route('/api/create-evaluation-program', methods=['POST'])
-def create_evaluation_program():
-    try:
-        data = request.json
-        periode = data.get('periode')
-        criteres_evaluation = data.get('criteres_evaluation')
-        lieu = data.get('lieu')
-        description = data.get('description')
-        contacts_urgence = data.get('contacts_urgence')
-        admin_email = data.get('adminEmail')
-        conseiller_emails = data.get('conseillerEmails')
-        email_subject = data.get('email_subject')
-        email_content = data.get('email_content')
-
-        # Créer un nouveau ProgrammeVisite
-        nouveau_programme = ProgrammeVisite(periode_debut=periode[0], periode_fin=periode[1], criteres_evaluation=criteres_evaluation, lieu=lieu, description=description, contacts_urgence=contacts_urgence)
-        db.session.add(nouveau_programme)
-
-        # Récupérer les AdminPublique par email
-        admins = AdminPublique.query.filter(AdminPublique.email == admin_email).all()
-
-        # Créer des entrées ProgrammeAdmin pour chaque admin
-        for admin in admins:
-            programme_admin = ProgrammeAdmin(
-                programme=nouveau_programme,
-                admin=admin
-            )
-            db.session.add(programme_admin)
-
-        db.session.commit()
-
-        # Récupérer les ConseillersLocaux par email
-        conseillers = ConseillerLocal.query.filter(ConseillerLocal.email.in_(conseiller_emails)).all()
-
-        # Créer des entrées ProgrammeConseiller pour chaque conseiller
-        for conseiller in conseillers:
-            programme_conseiller = ProgrammeConseiller(
-                programme=nouveau_programme,
-                conseiller=conseiller
-            )
-            db.session.add(programme_conseiller)
-
-        db.session.commit()
-
-        # Envoyer un email aux administrateurs publics et aux conseillers
-        send_email(admin_email, email_subject, email_content)
-        for conseiller_email in conseiller_emails:
-            send_email(conseiller_email, email_subject, email_content)
-
-        return jsonify({'message': 'Nouveaux programmes d\'évaluation créés avec succès et e-mails envoyés'}), 201
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-
-def send_email(to_email, subject, content):
-    # Configurer les détails du serveur SMTP
-    smtp_server = 'smtp.googlemail.com'
-    smtp_port = 587
-    smtp_username = 'nourgarali12345@gmail.com'
-    smtp_password = 'tmok wtxn cbia xobx'
-
-    # Créer un objet MIMEText avec le contenu de l'e-mail
-    message = MIMEMultipart()
-    message['From'] = smtp_username
-    message['To'] = to_email
-    message['Subject'] = subject
-    message.attach(MIMEText(content, 'plain'))
-
-    # Établir une connexion avec le serveur SMTP
-    server = smtplib.SMTP(smtp_server, smtp_port)
-    server.starttls()
-
-    # Se connecter au serveur SMTP
-    server.login(smtp_username, smtp_password)
-
-    # Envoyer l'e-mail
-    server.send_message(message)
-
-    # Fermer la connexion
-    server.quit()
-    
-    
-@app.route('/generate-email', methods=['POST'])
-def generate_email():
-    # Récupérer les données du formulaire
-    periode = request.form.get('periode')
-    criteres_evaluation = request.form.get('criteres_evaluation')
-    lieu = request.form.get('lieu')
-    description = request.form.get('description')
-    contacts_urgence = request.form.get('contacts_urgence')
-    admin_email = request.form.get('adminEmail')
-    conseiller_emails = request.form.getlist('conseillerEmails')
-
-    # Générer le sujet et le contenu de l'e-mail
-    email_subject = f"Programme de visite d'évaluation - {periode}"
-    email_content = f"""Bonjour,
-
-    Vous êtes invités à participer au programme de visite d'évaluation du {periode}. Les critères d'évaluation sont les suivants : {criteres_evaluation}.
-    
-    Lieu de visite : {lieu}
-    Description : {description}
-    Contacts d'urgence : {contacts_urgence}
-
-    Cordialement,"""
-
-    # Retourner le sujet et le contenu de l'e-mail générés
-    return jsonify({
-        "email_subject": email_subject,
-        "email_content": email_content,
-        "admin_email": admin_email,
-        "conseiller_emails": conseiller_emails
-    })
-    
-# -----------------------------------------------------Resultat------------------------------------------------------------
-@app.route('/resultats', methods=['POST'])
-def create_resultat():
-    data = request.get_json()
-
-    new_resultat = Resultat(
-        observations=data.get('observations'),
-        evaluations=data.get('evaluations'),
-        recommendations=data.get('recommendations'),
-        conseiller_id=data.get('conseiller_id'),
-        programme_id=data.get('programme_id'),
-    )
-
-    db.session.add(new_resultat)
+    # Hash du nouveau mot de passe et mise à jour dans la base de données
+    user.password = generate_password_hash(new_password)
     db.session.commit()
 
-    return jsonify(new_resultat.serialize()), 201
-# --------------------------------------Conseilleur local Visite-----------------------------------------------------
+    return jsonify({'message': 'Password updated successfully'}), 200
 
-@app.route('/api/list-programs-for-conseiller/<int:conseiller_id>', methods=['GET'])
-def list_programs_for_conseiller(conseiller_id):
-    try:
-        # Rechercher le conseiller par ID
-        conseiller = ConseillerLocal.query.get(conseiller_id)
-        
-        if conseiller is None:
-            return jsonify({'error': 'Conseiller introuvable'}), 404
+from flask import request, jsonify
 
-        # Récupérer les programmes de visite associés à ce conseiller
-        programmes = [
-            {
-                'programme_id': programme.programme_id,
-                'periode_debut': programme.programme.periode_debut,
-                'periode_fin': programme.programme.periode_fin,
-                'criteres_evaluation': programme.programme.criteres_evaluation,
-                'lieu': programme.programme.lieu,
-                'description': programme.programme.description,
-                'contacts_urgence': programme.programme.contacts_urgence,
-                'documents_joints': programme.programme.documents_joints,
-                'created_at': programme.programme.created_at
-            }
-            for programme in conseiller.programmes_visite
-        ]
+# Créer une réunion
+@app.route('/reunions', methods=['POST'])
+def create_reunion():
+    data = request.json
+    new_reunion = Reunion(
+        type_reunion=data['type_reunion'],
+        date=data['date'],
+        heure=data['heure'],
+        lieu=data['lieu'],
+        ordre_du_jour=data['ordre_du_jour'],
+        statut=data['statut']
+    )
+    db.session.add(new_reunion)
+    db.session.commit()
+    return jsonify({'message': 'Reunion created successfully'}), 201
 
-        return jsonify({'programs': programmes}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-# ------------------------------------------ AdminPublique ------------------------------------------------------------
+# Obtenir toutes les réunions
+@app.route('/reunions', methods=['GET'])
+def get_all_reunions():
+    reunions = Reunion.query.all()
+    return jsonify([reunion.serialize() for reunion in reunions]), 200
 
+# Obtenir une réunion par ID
+@app.route('/reunions/<int:reunion_id>', methods=['GET'])
+def get_reunion_by_id(reunion_id):
+    reunion = Reunion.query.get(reunion_id)
+    if not reunion:
+        return jsonify({'message': 'Reunion not found'}), 404
+    return jsonify(reunion.serialize()), 200
 
-@app.route('/api/list-programs-for-admin/<int:admin_id>', methods=['GET'])
-def list_programs_for_admin(admin_id):
-    try:
-        # Rechercher l'administrateur public par ID
-        admin = AdminPublique.query.get(admin_id)
-        
-        if admin is None:
-            return jsonify({'error': 'Administrateur public introuvable'}), 404
+# Mettre à jour une réunion
+@app.route('/reunions/<int:reunion_id>', methods=['PUT'])
+def update_reunion(reunion_id):
+    data = request.json
+    reunion = Reunion.query.get(reunion_id)
+    if not reunion:
+        return jsonify({'message': 'Reunion not found'}), 404
+    reunion.type_reunion = data['type_reunion']
+    reunion.date = data['date']
+    reunion.heure = data['heure']
+    reunion.lieu = data['lieu']
+    reunion.ordre_du_jour = data['ordre_du_jour']
+    reunion.statut = data['statut']
+    db.session.commit()
+    return jsonify({'message': 'Reunion updated successfully'}), 200
 
-        # Récupérer les programmes de visite associés à cet administrateur
-        programmes = [
-            {
-                'programme_id': programme.programme_id,
-                'periode_debut': programme.programme.periode_debut,
-                'periode_fin': programme.programme.periode_fin,
-                'criteres_evaluation': programme.programme.criteres_evaluation,
-                'lieu': programme.programme.lieu,
-                'description': programme.programme.description,
-                'contacts_urgence': programme.programme.contacts_urgence,
-                'documents_joints': programme.programme.documents_joints,
-                'created_at': programme.programme.created_at
-            }
-            for programme in admin.programmes_visite
-        ]
+# Supprimer une réunion
+@app.route('/reunions/<int:reunion_id>', methods=['DELETE'])
+def delete_reunion(reunion_id):
+    reunion = Reunion.query.get(reunion_id)
+    if not reunion:
+        return jsonify({'message': 'Reunion not found'}), 404
+    db.session.delete(reunion)
+    db.session.commit()
+    return jsonify({'message': 'Reunion deleted successfully'}), 200
 
-        return jsonify({'programs': programmes}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-# ------------------------------------------------lister tout les programmes de visite pour president--------------------------------------------------------
+serializer = URLSafeTimedSerializer(app.secret_key)
 
-@app.route('/api/list-all-programs', methods=['GET'])
-def list_all_programs():
-    try:
-        programs = ProgrammeVisite.query.all()
-        serialized_programs = [program.serialize() for program in programs]
-        return jsonify({'programs': serialized_programs}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-
-@app.route('/signup_conseilleur', methods=['POST'])
-def signup_conseilleur():
-    try:
-        data = request.form
-        firstName = data.get("firstName")
-        lastName = data.get("lastName")
-        password = data.get("password")
-        email = data.get("email")
-        profile_image = request.files.get('file')
-
-        # Vérification des données obligatoires
-        if not (firstName and lastName and password and email and profile_image):
-            return jsonify({"message": "Missing form data"}), 400
-
-        # Enregistrement de l'image sur le serveur
-        if profile_image and allowed_file(profile_image.filename):
-            filename = secure_filename(profile_image.filename)
-            profile_image.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        else:
-            return jsonify({"message": "Invalid image"}), 400
-
-        # Hasher le mot de passe avant de l'enregistrer dans la base de données
-        hashed_password = generate_password_hash(password)
-
-        # Création d'un nouveau conseiller avec les données du formulaire et le nom de fichier de l'image
-        new_conseilleur = ConseillerLocal(
-            firstName=firstName,
-            lastName=lastName,
-            password=hashed_password,
-            email=email,
-            profile_image=filename
-        )
-        db.session.add(new_conseilleur)
-        db.session.commit()
-
-        return jsonify({"message": "Conseiller created successfully"}), 201
-    except Exception as e:
-        print("Error during signup:", str(e))
-        return jsonify({"error": f"Error during signup: {str(e)}"}), 500
-
-
-@app.route("/Conseilleur", methods=["GET"])
-def get_all_Conseilleur():
-    try:
-        # Fetch all conseillerLocale
-        all_Conseilleur = ConseillerLocal.query.all()
-
-        # Print debug information
-        print("All conseillerLocale:", all_Conseilleur)
-
-        # Commit the transaction explicitly
-        db.session.commit()
-
-        # Serialize conseillerLocale data
-        serialized_conseillerLocale = [conseillerLocale.serialize() for conseillerLocale in all_Conseilleur]  # Call the serialize method
-
-        return jsonify({"data": serialized_conseillerLocale}), 200
-
-    except Exception as e:
-        print(e)
-        # Rollback the transaction in case of an exception
-        db.session.rollback()
-        return make_response({"message": f"Error: {str(e)}"}, 500)
-
-@app.route("/Conseilleur/<int:Conseilleur_id>", methods=["DELETE"])
-def delete_Conseilleur(Conseilleur_id):
-    try:
-        # Fetch the Conseilleur
-        Conseilleur_to_delete = ConseillerLocal.query.get(Conseilleur_id)
-        if not Conseilleur_to_delete:
-            return make_response({"message": f"conseillerLocale with id {Conseilleur_id} not found"}, 404)
-
-        db.session.delete(Conseilleur_to_delete)
-        db.session.commit()
-
-        return make_response({"message": "conseillerLocale deleted successfully"}, 200)
-
-    except Exception as e:
-        print(e)
-        db.session.rollback()
-        return make_response({"message": f"Unable to delete conseillerLocale: {str(e)}"}, 500)
-
-@app.route("/Conseilleur/<int:Conseilleur_id>", methods=["PUT"])
-def update_Conseilleur(Conseilleur_id):
-    try:
-        # Fetch the Conseilleur_id
-        Conseilleur_id_to_update = ConseillerLocal.query.get(Conseilleur_id)
-        if not Conseilleur_id_to_update:
-            return make_response({"message": f"conseillerLocale with id {Conseilleur_id} not found"}, 404)
-
-        # Update the Conseilleur_id fields
-        Conseilleur_id_to_update.firstName = request.form.get('firstName')
-        Conseilleur_id_to_update.lastName = request.form.get('lastName')
-        Conseilleur_id_to_update.email = request.form.get('email')
-
-        # Check if a file was uploaded in the request
-        if 'file' in request.files:
-            file = request.files['file']
-            if file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-
-                # Update the profile image path in the database
-                Conseilleur_id_to_update.profile_image = filename
-
-        db.session.commit()
-
-        return jsonify({"message": "conseillerLocale updated successfully"}), 200
-
-    except Exception as e:
-        print(e)
-        db.session.rollback()
-        return make_response({"message": "Unable to update conseillerLocale"}, 500)
+@app.route('/forgot_password', methods=['POST'])
+def forgot_password():
+    email = request.json.get('email')
+    # Vérifiez si l'e-mail existe dans votre base de données ou système d'authentification
+    # Générez un token de réinitialisation du mot de passe
+    token = serializer.dumps(email)
+    # Envoyez l'e-mail avec le lien contenant le token de réinitialisation
+    # Vous pouvez utiliser Flask-Mail ou un autre service pour envoyer des e-mails
+    return jsonify({'message': 'Un e-mail de réinitialisation a été envoyé.'})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
