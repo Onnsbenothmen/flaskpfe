@@ -1,6 +1,8 @@
 from . import db
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
+from sqlalchemy import and_
+
 
 class Users(db.Model):
     __tablename__ = "Users"
@@ -19,6 +21,9 @@ class Users(db.Model):
     instance_id = db.Column(db.Integer, db.ForeignKey("instances.id"))
     instance = db.relationship('Instance', back_populates='users')
     reunions = db.relationship('Reunion', back_populates='user')
+    verification_code = db.Column(db.String(10))  # Ajoutez cette ligne pour l'attribut verification_code
+    is_archived = db.Column(db.Boolean, default=False)  # Nouveau champ pour indiquer si l'utilisateur est archivé
+
 
 
     def __repr__(self):
@@ -35,8 +40,23 @@ class Users(db.Model):
             "created_at": self.created_at,
             "profile_image": self.profile_image,
             "phoneNumber": self.phoneNumber,  # Ajout du numéro de téléphone
-            "address": self.address  # Ajout de l'adresse
+            "address": self.address, # Ajout de l'adresse
+            "is_archived": self.is_archived
         }
+
+from . import db
+
+class ArchivedUser(db.Model):
+    __tablename__ = 'archived_users'
+    id = db.Column(db.Integer, primary_key=True)
+    # Ajoutez d'autres colonnes au besoin
+    
+    user_id = db.Column(db.Integer, db.ForeignKey('Users.id'))  # Assurez-vous que 'users' est le bon nom de table
+    user = db.relationship('Users', backref='archived_users')
+
+    def __repr__(self):
+        return f"<ArchivedUser id={self.id}>"
+
 
 class Role(db.Model):
     __tablename__ = "Role"
@@ -61,21 +81,25 @@ class Instance(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     president_email = db.Column(db.String(100), nullable=False)
     instance_name = db.Column(db.String(100), nullable=False)
+    nombre_conseille = db.Column(db.Integer)  # Ajout de la colonne pour le nombre de conseillers
+    gouvernement = db.Column(db.String(100))  # Ajout de la colonne pour le gouvernement
     ville = db.Column(db.String(100), nullable=False)
     active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     users = db.relationship('Users', back_populates='instance')
-
 
     def serialize(self):
         return {
             "id": self.id,
             "president_email": self.president_email,
             "instance_name": self.instance_name,
+            "nombre_conseille": self.nombre_conseille,  # Ajout du nombre de conseillers
+            "gouvernement": self.gouvernement,  # Ajout du gouvernement
             "ville": self.ville,
             "active": self.active,
             "created_at": self.created_at,
         }
+
 
 class ProgrammeVisite(db.Model):
     __tablename__ = "ProgrammeVisite"
@@ -131,14 +155,14 @@ class Reunion(db.Model):
 
 
     def serialize(self):
-        return {
+        serialized_data = {
             'id': self.id,
             'type_reunion': self.type_reunion,
-            'date': self.date.isoformat(),
-            'heure': self.heure.isoformat(),
+            'date': self.date.isoformat() if self.date else None,
+            'heure': self.heure.isoformat() if self.heure else None,
             'lieu': self.lieu,
             'ordre_du_jour': self.ordre_du_jour,
             'statut': self.statut,
-            'user': self.user.serialize() if self.user else None  # Sérialiser l'utilisateur associé à la réunion
-
+            'user': self.user.serialize() if self.user else None
         }
+        return serialized_data
