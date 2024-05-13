@@ -7,10 +7,10 @@ from sqlalchemy import and_
 class Users(db.Model):
     __tablename__ = "Users"
     id = db.Column(db.Integer, primary_key=True)
-    firstName = db.Column(db.String(100), nullable=False)
-    lastName = db.Column(db.String(200), nullable=False)
-    password = db.Column(db.String(250), nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)
+    firstName = db.Column(db.String(100), nullable=True)
+    lastName = db.Column(db.String(200), nullable=True)
+    password = db.Column(db.String(250), nullable=True)
+    email = db.Column(db.String(100), unique=True, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     profile_image = db.Column(db.String(250))  # Champ pour l'image de profil
     role_id = db.Column(db.Integer, db.ForeignKey("Role.id"))
@@ -23,6 +23,9 @@ class Users(db.Model):
     reunions = db.relationship('Reunion', back_populates='user')
     verification_code = db.Column(db.String(10))  # Ajoutez cette ligne pour l'attribut verification_code
     is_archived = db.Column(db.Boolean, default=False)  # Nouveau champ pour indiquer si l'utilisateur est archivé
+    is_active = db.Column(db.Boolean, default=False)  # Champ pour indiquer si l'utilisateur est actif
+
+    
 
 
 
@@ -43,6 +46,31 @@ class Users(db.Model):
             "address": self.address, # Ajout de l'adresse
             "is_archived": self.is_archived
         }
+class Instance(db.Model):
+    __tablename__ = "instances"
+    id = db.Column(db.Integer, primary_key=True)
+    instance_name = db.Column(db.String(100), nullable=False)
+    president_email = db.Column(db.String(100), nullable=False)
+    nombre_conseille = db.Column(db.Integer)  # Ajout de la colonne pour le nombre de conseillers
+    gouvernement = db.Column(db.String(100))  # Ajout de la colonne pour le gouvernement
+    ville = db.Column(db.String(100), nullable=False)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+    users = db.relationship('Users', back_populates='instance')
+
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "instance_name": self.instance_name,
+            "president_email": self.president_email,
+            "nombre_conseille": self.nombre_conseille,  # Ajout du nombre de conseillers
+            "gouvernement": self.gouvernement,  # Ajout du gouvernement
+            "ville": self.ville,
+            "active": self.active,
+            "created_at": self.created_at,
+        }
+
 
 
 
@@ -75,29 +103,7 @@ class Role(db.Model):
             "description": self.description,
         }
 
-class Instance(db.Model):
-    __tablename__ = "instances"
-    id = db.Column(db.Integer, primary_key=True)
-    president_email = db.Column(db.String(100), nullable=False)
-    instance_name = db.Column(db.String(100), nullable=False)
-    nombre_conseille = db.Column(db.Integer)  # Ajout de la colonne pour le nombre de conseillers
-    gouvernement = db.Column(db.String(100))  # Ajout de la colonne pour le gouvernement
-    ville = db.Column(db.String(100), nullable=False)
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
-    users = db.relationship('Users', back_populates='instance')
 
-    def serialize(self):
-        return {
-            "id": self.id,
-            "president_email": self.president_email,
-            "instance_name": self.instance_name,
-            "nombre_conseille": self.nombre_conseille,  # Ajout du nombre de conseillers
-            "gouvernement": self.gouvernement,  # Ajout du gouvernement
-            "ville": self.ville,
-            "active": self.active,
-            "created_at": self.created_at,
-        }
 
 class ProgrammeVisite(db.Model):
     __tablename__ = "ProgrammeVisite"

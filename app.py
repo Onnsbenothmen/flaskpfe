@@ -2,7 +2,7 @@ from functools import wraps
 from sqlalchemy.sql import func
 from . import app, db
 from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat
-
+from sqlalchemy import event
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt as pyjwt
 from datetime import datetime, timezone, timedelta
@@ -109,9 +109,10 @@ def send_login_details(email, firstName, password, role_name):
         print("Erreur lors de l'envoi des informations de connexion par e-mail :", str(e))
 
 # Route pour l'inscription d'un nouvel utilisateur
-@app.route('/signup', methods=['POST'])
-def signup():
+from flask import jsonify
 
+@app.route('/signup/<int:newUserId>', methods=['POST'])
+def signup(newUserId):  # Utilisez newUserId comme paramètre de route
     roles = Role.query.all()
     roles_data = [{"id": role.id, "name": role.name} for role in roles]
 
@@ -136,31 +137,64 @@ def signup():
 
         hashed_password = generate_password_hash(password)
 
-        # Obtenir l'ID du rôle président
-        president_role_id = None
-        for role in roles_data:
-            if role["name"] == "président":
-                president_role_id = role["id"]
-                break
+        # Rechercher l'utilisateur existant avec l'ID spécifié
+        existing_user = Users.query.filter_by(id=newUserId).first()
 
-        # Créer un nouvel utilisateur avec le rôle par défaut président
-        new_user = Users(
-            firstName=first_name,
-            lastName=last_name,
-            email=email,
-            password=hashed_password,
-            phoneNumber=phone_number,
-            address=address,
-            profile_image=filename,
-            role_id=president_role_id  # Utiliser l'ID du rôle président par défaut
-        )
-        db.session.add(new_user)
-        db.session.commit()
+        if existing_user:
+            # Mettre à jour les champs de l'utilisateur existant avec les nouvelles données
+            existing_user.firstName = first_name
+            existing_user.lastName = last_name
+            existing_user.email = email
+            existing_user.password = hashed_password
+            existing_user.phoneNumber = phone_number
+            existing_user.address = address
+            existing_user.profile_image = filename
+            existing_user.is_active = True  # Modifier is_active en True
 
-        return jsonify({"message": "Utilisateur enregistré avec succès"}), 201
+
+            db.session.commit()
+
+            return jsonify({"message": "Utilisateur mis à jour avec succès"}), 200
+        else:
+            return jsonify({"message": "Utilisateur non trouvé"}), 404
     else:
         return jsonify({"message": "Extension de fichier non autorisée"}), 400
-# Route de connexion
+
+
+def send_email_to_president(president_email, instance_name, ville, new_user_id):
+    try:
+        # Lien d'inscription avec l'ID de l'utilisateur
+        signup_link = f"http://localhost:3000/signup/{new_user_id}"
+
+        # Créer le message d'e-mail avec le lien d'inscription
+        message_body = (f"Bienvenue Monsieur/Madame le président,\n\n"
+                        f"Une nouvelle instance a été créée pour votre gestion. Les détails sont les suivants :\n\n"
+                        f"Nom de l'instance : {instance_name}\n"
+                        f"Ville : {ville}\n\n"
+                        f"Pour vous inscrire, veuillez cliquer sur le lien suivant :\n"
+                        f"{signup_link}\n\n"
+                        f"Merci de prendre les mesures nécessaires.\n\n"
+                        f"Cordialement,\nVotre application")
+
+        message = Message(subject="Nouvelle instance créée",
+                          recipients=[president_email],
+                          body=message_body)
+
+        # Envoyer l'e-mail
+        mail.send(message)  # Assurez-vous d'avoir configuré Flask-Mail correctement dans votre application
+
+        # Enregistrer les détails de l'email envoyé dans la base de données
+        sent_email = SentEmail(
+            president_email=president_email,
+            subject="Nouvelle instance créée",
+            body=message_body,
+            sent_at=datetime.now()
+        )
+        db.session.add(sent_email)
+        db.session.commit()
+    except Exception as e:
+        print("Error sending email:", e)
+
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -274,7 +308,25 @@ def users():
         print(e)
         return make_response({"message": f"Erreur: {str(e)}"}, 500)
 
+@app.route('/active-users', methods=['GET'])
+def get_active_users():
+    active_users = Users.query.filter_by(is_active=True).all()
 
+    if active_users:
+        active_users_data = [{
+            "id": user.id,
+            "firstName": user.firstName,
+            "lastName": user.lastName,
+            "email": user.email,
+            "phoneNumber": user.phoneNumber,
+            "address": user.address,
+            "profile_image": user.profile_image
+        } for user in active_users]
+
+        return jsonify({"active_users": active_users_data}), 200
+    else:
+        return jsonify({"message": "Aucun utilisateur actif trouvé"}), 404
+        
 @app.route("/users/<int:user_id>", methods=["PUT"])
 def update_user(user_id):
     try:
@@ -381,6 +433,35 @@ def get_archived_users():
     return jsonify(serialized_users)
 
 
+@app.route('/users/not-registered', methods=['GET'])
+def get_users_not_registered():
+    # Récupérer l'email de l'instance à partir des paramètres de requête
+    instance_email = request.args.get('instance_email')
+
+    if instance_email:
+        # Recherche de l'instance par son email
+        instance = Instance.query.filter_by(president_email=instance_email).first()
+
+        if instance:
+            # Récupération de tous les utilisateurs ayant l'email de l'instance et non inscrits
+            users_not_registered = Users.query.filter_by(email=instance_email, instance_id=instance.id, is_active=False).all()
+
+            # Sérialisation des données des utilisateurs
+            serialized_users = [user.serialize() for user in users_not_registered]
+
+            # Maintenant, nous récupérons également les emails des présidents des instances actives non archivées
+            presidents = db.session.query(Users.email).join(Instance, Users.instance_id == Instance.id)\
+                             .filter(Instance.active == True, Instance.is_archived == False)\
+                             .all()
+            president_emails = [president[0] for president in presidents]
+
+            return jsonify(serialized_users, president_emails)
+        else:
+            return jsonify({'error': 'Instance not found'})
+    else:
+        return jsonify({'error': 'Instance email not provided'})
+
+
 
 
 @app.route('/update_profile/<int:user_id>', methods=['PUT'])
@@ -448,57 +529,52 @@ def delete_user(user_id):
 
 @app.route("/addInstances", methods=["POST"])
 def addInstance():
-    try:
-        data = request.json
-        president_email = data.get("president_email")
-        instance_name = data.get("instance_name")
-        nombre_conseille = data.get("nombre_conseille")
-        gouvernement = data.get("gouvernement")
-        ville = data.get("ville")
-        active = data.get("active")
+    data = request.json
+    president_email = data.get("president_email")
+    instance_name = data.get("instance_name")
+    nombre_conseille = data.get("nombre_conseille")
+    ville = data.get("ville")  
+    active = data.get("active")
+    created_at = data.get("created_at")
+    gouvernement = data.get("gouvernement")
 
-        if president_email and instance_name and ville:
-            instance = Instance.query.filter_by(president_email=president_email).first()
-            if instance:
-                return make_response({"message": "Instance already exists"}, 200)
+    if president_email and instance_name and ville:  
+        instance = Instance.query.filter_by(president_email=president_email).first()
+        if instance:
+            return make_response({"message": "Instance already exists"}, 200)
 
-            new_instance = Instance(
-                president_email=president_email,
-                instance_name=instance_name,
-                nombre_conseille=nombre_conseille,
-                gouvernement=gouvernement,
-                ville=ville,
-                active=active if active is not None else True,
-            )
-            db.session.add(new_instance)
-            db.session.commit()
-
-            send_email_to_president(president_email, instance_name, ville)
-
-            return make_response({"message": "Instance Created and Email sent to President"}, 201)
-
-        return make_response({"message": "Missing required fields"}, 400)
-    except Exception as e:
-        print(e)
-        return make_response({"message": f"Error: {str(e)}"}, 500)
-
-
-@app.route('/instances/<int:id>', methods=['PUT'])
-def update_instance(id):
-    try:
-        instance = Instance.query.get_or_404(id)
-        data = request.json
-        instance.president_email = data.get('president_email', instance.president_email)
-        instance.instance_name = data.get('instance_name', instance.instance_name)
-        instance.nombre_conseille = data.get('nombre_conseille', instance.nombre_conseille)
-        instance.gouvernement = data.get('gouvernement', instance.gouvernement)
-        instance.ville = data.get('ville', instance.ville)
-        instance.active = data.get('active', instance.active)
+        new_instance = Instance(
+            president_email=president_email,
+            instance_name=instance_name,
+            nombre_conseille=nombre_conseille,
+            ville=ville,
+            active=active if active is not None else True,
+            created_at=created_at,
+            gouvernement=gouvernement
+        )
+        db.session.add(new_instance)
         db.session.commit()
-        return instance.serialize(), 200
-    except Exception as e:
-        print(e)
-        return make_response({"message": f"Error: {str(e)}"}, 500)
+
+        instance_id = new_instance.id
+
+        # Créer un nouvel enregistrement dans la classe Users avec seulement l'ID de l'instance
+        new_user = Users(
+            instance_id=instance_id
+        )
+        db.session.add(new_user)
+        db.session.commit()
+
+        send_email_to_president(president_email, instance_name, ville, new_user.id)
+
+
+        return make_response({"message": "Instance Created"}, 201)
+
+    return make_response({"message": "Missing required fields"}, 400)
+
+
+
+
+
 
 @app.route("/instances", methods=["GET"])
 def get_all_instances():
@@ -515,6 +591,18 @@ def get_all_instances():
         print(e)
         return make_response({"message": f"Error: {str(e)}"}, 500)
 
+
+@app.route('/instances/<int:id>', methods=['PUT'])
+def update_instance(id):
+    instance = Instance.query.get_or_404(id)
+    data = request.json
+    instance.president_email = data.get('president_email', instance.president_email)
+    instance.nombre_conseille = data.get('nombre_conseille', instance.nombre_conseille)
+    instance.ville = data.get('ville', instance.ville)
+    instance.active = data.get('active', instance.active)
+    instance.gouvernement = data.get('gouvernement',instance.gouvernement)
+    db.session.commit()
+    return instance.serialize(), 200
 
 @app.route("/instances/<int:instance_id>", methods=["DELETE"])
 def delete_instance(instance_id):
@@ -533,31 +621,46 @@ def delete_instance(instance_id):
         db.session.rollback()
         return make_response({"message": f"Unable to delete instance: {str(e)}"}, 500)
 
-def send_email_to_president(president_email, instance_name, ville):
+from flask import jsonify
+
+@app.route('/inactive_presidents', methods=['GET'])
+def inactive_presidents():
     try:
-        # Lien d'inscription
-        signup_link = "http://localhost:3000/signup"
-
-        # Créer le message d'e-mail avec le lien d'inscription
-        message_body = (f"Bienvenue Monsieur/Madame le président,\n\n"
-                        f"Une nouvelle instance a été créée pour votre gestion. Les détails sont les suivants :\n\n"
-                        f"Nom de l'instance : {instance_name}\n"
-                        f"Ville : {ville}\n\n"
-                        f"Pour vous inscrire, veuillez cliquer sur le lien suivant :\n"
-                        f"{signup_link}\n\n"
-                        f"Merci de prendre les mesures nécessaires.\n\n"
-                        f"Cordialement,\nVotre application")
-
-        message = Message(subject="Nouvelle instance créée",
-                          recipients=[president_email],
-                          body=message_body)
-
-        # Envoyer l'e-mail
-        mail.send(message)  # Assurez-vous d'avoir configuré Flask-Mail correctement dans votre application
+        # Récupérer les instances ayant un utilisateur avec is_active=False
+        instances_with_inactive_users = Instance.query.join(Users).filter(Users.is_active == False).with_entities(Instance.president_email).all()
+        
+        # Convertir la liste de tuples en liste de chaînes
+        inactive_presidents_emails = [instance[0] for instance in instances_with_inactive_users]
+        
+        return jsonify(inactive_presidents_emails), 200
     except Exception as e:
-        print("Error sending email:", e)
+        print(str(e))
+        return jsonify({"error": "An error occurred while fetching inactive presidents"}), 500
+
+# Définir une fonction pour rechercher une instance par n'importe quel champ
+def search_instance(query):
+    instances = Instance.query.filter(or_(
+        Instance.instance_name.ilike(f'%{query}%'),
+        Instance.president_email.ilike(f'%{query}%'),
+        Instance.gouvernement.ilike(f'%{query}%'),
+        Instance.ville.ilike(f'%{query}%')
+    )).all()
+    return instances
 
 
+# Route pour la recherche d'instances par n'importe quel champ
+@app.route('/instances/search', methods=['GET'])
+def search_instances():
+    query = request.args.get('q')  # Récupérer le paramètre de requête 'q'
+    if query:
+        instances = search_instance(query)
+        if instances:
+            serialized_instances = [instance.serialize() for instance in instances]
+            return jsonify(serialized_instances), 200
+        else:
+            return jsonify({"message": "No instances found for the given query"}), 404
+    else:
+        return jsonify({"message": "Query parameter is required"}), 400
 
 @app.route("/roles", methods=["POST"])
 def create_role():
