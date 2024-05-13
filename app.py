@@ -232,7 +232,7 @@ def superAdmin_dashboard(current_user):
 @app.route("/admin_dashboard")
 @token_required
 def admin_dashboard(current_user):
-    if current_user.role.name != 'adminPublique':
+    if current_user.role.name != 'directeur':
         return make_response({'message': 'Permission denied'}, 403)
 
 
@@ -861,7 +861,6 @@ def get_all_users():
 
 from sqlalchemy import or_
 
-
 @app.route('/programme_visite', methods=['POST'])
 def create_programme_visite():
     data = request.get_json()
@@ -879,7 +878,9 @@ def create_programme_visite():
                 contacts_urgence=data['contacts_urgence'],
                 user_id=user.id,
                 conseiller_email=user.email,
-                admin_email=data['admin_email']
+                admin_email=data['admin_email'],
+                nomProgramme=data['nomProgramme'],
+                nomAdminPublique=data['nomAdminPublique']
             )
             db.session.add(new_programme)
         
@@ -904,24 +905,32 @@ def create_programme_visite():
 
 #from flask_mail import Message
 
+
 @app.route('/send_email', methods=['POST'])
 def send_email():
-    try:
-        data = request.json
-        conseillers = data['conseillers']
-        emailData = data['emailData']
-        subject = emailData['subject']
-        content = emailData['content']
-
-        # Envoi de l'e-mail à chaque conseiller
-        for conseiller in conseillers:
-            msg = Message(subject, sender=app.config['MAIL_USERNAME'], recipients=[conseiller])
-            msg.body = content
+    data = request.json
+    emailData = data['emailData']
+    admin_email = data.get('admin_email')  # Vérifier si l'e-mail de l'administration est fourni
+    conseillers = data.get('conseillers')
+    
+    # Envoyer l'e-mail aux conseillers
+    if conseillers:
+        for conseiller_email in conseillers:
+            msg = Message(emailData['subject'], recipients=[conseiller_email])
+            msg.body = emailData['content']
             mail.send(msg)
+    
+    # Envoyer l'e-mail à l'administration
+    if admin_email:
+        msg_admin = Message(emailData['subject'], recipients=[admin_email])
+        msg_admin.body = emailData['content']
+        mail.send(msg_admin)
+    
+    return jsonify({'message': 'E-mails envoyés avec succès'}), 200
 
-        return jsonify({'message': 'E-mails envoyés avec succès'}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    
+    
+    
 
 @app.route('/ListeVisiteEvaluation', methods=['GET'])
 def get_programmes_visite():
@@ -988,6 +997,23 @@ from reportlab.lib.pagesizes import letter
 
 UPLOAD_FOLDER = 'static/pdfRapport'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+import requests
+import fitz
+import os
+
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from babel.dates import format_datetime
+import datetime
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+
+
+
+
+
 
 @app.route('/evaluation/<int:programme_id>', methods=['POST'])
 def submit_evaluation(programme_id):
@@ -998,8 +1024,15 @@ def submit_evaluation(programme_id):
     evaluations = data.get('evaluations')
     recommendations = data.get('recommendations')
 
-    # Enregistre l'évaluation dans la base de données
     try:
+        # Récupérer les informations sur le programme de visite à partir de la base de données
+        programme_visite = ProgrammeVisite.query.get(programme_id)
+        lieu = programme_visite.lieu  # Supposons que le lieu soit un attribut de votre modèle ProgrammeVisite
+        periode_debut = format_datetime(programme_visite.periode_debut, format='d MMMM yyyy', locale='fr_FR')
+        description = programme_visite.description
+        nom_programme = programme_visite.nomProgramme
+
+        # Enregistre l'évaluation dans la base de données
         new_evaluation = Resultat(
             programme_id=programme_id,
             observations=observations,
@@ -1013,18 +1046,63 @@ def submit_evaluation(programme_id):
         pdf_io = BytesIO()
 
         # Crée le PDF en utilisant pdf_io comme fichier en mémoire
-        p = canvas.Canvas(pdf_io)
-        p.drawString(100, 750, f"Observations: {observations}")
-        p.drawString(100, 735, f"Évaluations: {evaluations}")
-        p.drawString(100, 720, f"Recommandations: {recommendations}")
-        p.showPage()
-        p.save()
+        doc = SimpleDocTemplate(pdf_io, pagesize=letter)
+
+        # Prépare le contenu du PDF
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'Title',
+            parent=styles['Heading1'],
+            fontName='Helvetica-Bold',
+            fontSize=18,  # Augmentez la taille de la police ici
+            alignment=TA_CENTER,
+            spaceAfter=12,
+        )
+        bold_style = ParagraphStyle(
+            'Normal',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold'
+        )
+        Story = []  # Supprimez le Spacer ici
+
+        # Ajoute le texte au PDF
+        text = f"""
+        <para align=center><b>Rapport d'Évaluation</b></para>
+
+        <b>Programme de Visite:</b> {nom_programme}
+        <b>Lieu :</b> {lieu}
+        <b>date :</b> {periode_debut}
+        <b>Évalué par:</b> [Nom de l'évaluateur]
+        <b>Introduction</b>
+        Le cadre de notre engagement continu envers l’amélioration de la gouvernance locale, une visite d’évaluation a été effectuée au {lieu} le {periode_debut}. Cette visite s’inscrit dans une série d’efforts visant à optimiser les services offerts aux citoyens et à renforcer la transparence des opérations des conseils locaux.
+        <b>Objectifs de la Visite :</b>
+        {description}
+        <b>Observations et Évaluations</b>
+        Les observations faites lors de la visite ont révélé que :
+        {observations}
+        <b>Recommandations</b>
+        Sur la base des évaluations, nous recommandons les actions suivantes :
+        {recommendations}
+        Ce rapport, synthétisant nos observations, évaluations et recommandations, sera partagé avec la communauté via notre page Facebook pour garantir une transparence totale et encourager une participation citoyenne active dans le processus d’amélioration continue.
+        <b>Conclusion</b>
+        Cette visite a permis de mettre en lumière les forces et les faiblesses des services évalués. Les recommandations fournies visent à guider les efforts d’amélioration continue. Nous restons dédiés à l’excellence dans la prestation de services aux citoyens et à la promotion d’une gouvernance locale efficace et transparente.
+        """
+        for line in text.split('\n'):
+            p = Paragraph(line, bold_style if any(keyword in line for keyword in ["Lieu", "Date", "Introduction", "Objectifs de la Visite", "Observations", "Évaluations", "Recommandations"]) else styles["Normal"])
+            Story.append(p)
+            Story.append(Spacer(1,0.2*inch))
+
+        # Construit le PDF
+        doc.build(Story)
 
         # Sauvegarde le PDF sur le serveur
-        pdf_filename = f"evaluation_{programme_id}.pdf"
+        pdf_filename = f"evaluation_{nom_programme}.pdf"  # Utiliser nomProgramme au lieu de programme_id dans le nom de fichier
         pdf_io.seek(0)
         with open(os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename), 'wb') as f:
             f.write(pdf_io.read())
+
+        # Partage automatique sur Facebook
+        share_on_facebook(pdf_filename)  # Assurez-vous d'implémenter cette fonction
 
         # Retourne le PDF comme réponse
         pdf_io.seek(0)
@@ -1036,7 +1114,76 @@ def submit_evaluation(programme_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
     
+
     
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+def share_on_facebook(pdf_filename):
+    # Ouvrir le fichier PDF
+    pdf_file_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+    doc = fitz.open(pdf_file_path)
+
+    # Récupérer la première image de la première page du PDF
+    page = doc.load_page(0)
+    pixmap = page.get_pixmap()
+
+    # Créer un fichier temporaire pour stocker l'image
+    image_temp_path = "temp_image.jpg"
+    pixmap.save(image_temp_path)
+
+    # Ouvrir le fichier image et le lire en tant que fichier binaire
+    with open(image_temp_path, "rb") as file:
+        image_content = file.read()
+
+    # Créer les données de la requête pour télécharger l'image en tant que pièce jointe
+    files = {
+        "file": ("temp_image.jpg", image_content, "image/jpeg")
+    }
+
+    # Créer les données pour la publication sur Facebook
+    data = {
+        "message": "Voici le rapport d'évaluation",
+        "published": "true",
+    }
+
+    # Ajouter les en-têtes nécessaires (y compris l'autorisation)
+    headers = {
+        "Authorization": "Bearer EAANo3OC0ZC0oBOZCJ2oxtgPpApebxhrxrQT4lBGpvG5YhJZCF2RrjElSLjp7xZBA2rmUtACIExZCVIalTRHSiDWAp4CjVmBo2iBw0n8ZAZA6Orh6bfxVZBYejTqNyiKzG7JYHZCdJAg0dcZBUsT3Ef3x0cFtA7kJnMW2VesMRlYkORNNQG77r3cHKbleYJXUNtOsMC84rKZBYXZCihKVd2ZCkLoGfniqblOeshk0ZD"
+    }
+
+    # Envoyer la requête pour télécharger l'image
+    response = requests.post("https://graph.facebook.com/v19.0/261223573746767/photos", headers=headers, data=data, files=files)
+
+    # Afficher la réponse
+    print(response.json())
+
+
+
     
     
 from flask import send_from_directory
