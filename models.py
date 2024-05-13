@@ -26,8 +26,7 @@ class Users(db.Model):
     is_active = db.Column(db.Boolean, default=False)  # Champ pour indiquer si l'utilisateur est actif
 
     
-
-
+#aaaaaa
 
     def __repr__(self):
         return f'<User {self.firstName} {self.id}>'
