@@ -2,6 +2,8 @@ from . import db
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from sqlalchemy import and_
+from datetime import datetime
+
 
 
 class Users(db.Model):
@@ -70,7 +72,14 @@ class Instance(db.Model):
             "created_at": self.created_at,
         }
 
+class SentEmail(db.Model):
+    __tablename__ = 'sent_emails'
 
+    id = db.Column(db.Integer, primary_key=True)
+    president_email = db.Column(db.String(255), nullable=False)
+    subject = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
 class ArchivedUser(db.Model):

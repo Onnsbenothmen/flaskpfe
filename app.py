@@ -1,7 +1,7 @@
 from functools import wraps
 from sqlalchemy.sql import func
 from . import app, db
-from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat
+from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat,SentEmail
 from sqlalchemy import event
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt as pyjwt
@@ -26,6 +26,7 @@ from . import app
 from io import BytesIO
 from itsdangerous import URLSafeTimedSerializer
 from flask import send_from_directory
+
 
 
 #app = Flask(__name__)
@@ -195,6 +196,34 @@ def send_email_to_president(president_email, instance_name, ville, new_user_id):
     except Exception as e:
         print("Error sending email:", e)
 
+@app.route("/resendEmailToPresident/<int:instance_id>", methods=["POST"])
+def resend_email_to_president(instance_id):
+    try:
+        # Récupérer les détails de l'instance à partir de la base de données
+        instance = Instance.query.get(instance_id)
+        if not instance:
+            return make_response({"message": "Instance not found"}, 404)
+
+        # Récupérer l'utilisateur associé à cette instance
+        user = Users.query.filter_by(instance_id=instance_id).first()
+        if not user:
+            return make_response({"message": "User not found"}, 404)
+
+        # Extraire l'ID de l'utilisateur
+        new_user_id = user.id
+
+        # Récupérer l'e-mail du président associé à cette instance
+        president_email = instance.president_email
+
+        # Appeler la fonction pour renvoyer l'e-mail au président
+        send_email_to_president(president_email, instance.instance_name, instance.ville, new_user_id)
+
+        return make_response({"message": "Email resent successfully"}, 200)
+    except Exception as e:
+        print("Error resending email:", e)
+        return make_response({"message": "Internal server error"}, 500)
+
+
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -294,38 +323,22 @@ def users():
     try:
         role_name = request.args.get('role')
         if role_name:
-            users = Users.query.join(Role).filter(Role.name == role_name).filter_by(is_archived=False).all()
+            users = Users.query.join(Role).filter(Role.name == role_name).filter_by(is_archived=False, is_active=True).all()
             if role_name == 'président':
                 serialized_users = [{"email": user.email} for user in users]
             else:
                 serialized_users = [user.serialize() for user in users]
             return jsonify({"data": serialized_users}), 200
         else:
-            users = Users.query.filter_by(is_archived=False).all()  # Exclure les utilisateurs archivés
+            users = Users.query.filter_by(is_archived=False, is_active=True).all()  # Exclure les utilisateurs archivés
             serialized_users = [user.serialize() for user in users]
             return jsonify({"data": serialized_users}), 200
     except Exception as e:
         print(e)
         return make_response({"message": f"Erreur: {str(e)}"}, 500)
 
-@app.route('/active-users', methods=['GET'])
-def get_active_users():
-    active_users = Users.query.filter_by(is_active=True).all()
 
-    if active_users:
-        active_users_data = [{
-            "id": user.id,
-            "firstName": user.firstName,
-            "lastName": user.lastName,
-            "email": user.email,
-            "phoneNumber": user.phoneNumber,
-            "address": user.address,
-            "profile_image": user.profile_image
-        } for user in active_users]
 
-        return jsonify({"active_users": active_users_data}), 200
-    else:
-        return jsonify({"message": "Aucun utilisateur actif trouvé"}), 404
         
 @app.route("/users/<int:user_id>", methods=["PUT"])
 def update_user(user_id):
@@ -344,6 +357,8 @@ def update_user(user_id):
             user.lastName = data['lastName']
         if 'email' in data:
             user.email = data['email']
+        if 'phoneNumber' in data:
+            user.phoneNumber = data['phoneNumber'] 
         if 'file' in request.files:
             file = request.files['file']
             if file and allowed_file(file.filename):
@@ -423,14 +438,24 @@ from sqlalchemy import text
 
 @app.route('/api/archived-user', methods=['GET'])
 def get_archived_users():
-    # Query the Users model to retrieve archived users
-    archived_users = Users.query.filter_by(is_archived=True).all()
+    try:
+        # Query the Users model to retrieve archived users
+        archived_users = Users.query.filter_by(is_archived=True, is_active=True).all()
 
-    # Serialize the archived user objects to JSON format
-    serialized_users = [user.serialize() for user in archived_users]
+        # Serialize the archived user objects to JSON format
+        serialized_users = []
+        for user in archived_users:
+            serialized_user = user.serialize()
+            # Ajouter l'avatar à la sérialisation de l'utilisateur
+            serialized_user['profile_image'] = user.profile_image
+            serialized_users.append(serialized_user)
 
-    # Return the serialized users as a JSON response
-    return jsonify(serialized_users)
+        # Return the serialized users as a JSON response
+        return jsonify(serialized_users), 200
+    except Exception as e:
+        print(e)
+        return make_response({"message": f"Erreur: {str(e)}"}, 500)
+
 
 
 @app.route('/users/not-registered', methods=['GET'])
