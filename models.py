@@ -15,26 +15,27 @@ class Users(db.Model):
     email = db.Column(db.String(100), unique=True, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     profile_image = db.Column(db.String(250))  # Champ pour l'image de profil
+    nameAdminPublique = db.Column(db.String(100))
     role_id = db.Column(db.Integer, db.ForeignKey("Role.id"))
     role = db.relationship('Role', back_populates='users')
-    programmes_visite = db.relationship('ProgrammeVisite', back_populates='user', cascade='all, delete-orphan')
+    programmes_visite = db.relationship('ProgrammeVisite', back_populates='user', cascade='all, delete-orphan')   
     phoneNumber = db.Column(db.String(20), nullable=True)  # Nouveau champ pour le numéro de téléphone
     address = db.Column(db.String(255), nullable=True)  # Nouveau champ pour l'adresse
     instance_id = db.Column(db.Integer, db.ForeignKey("instances.id"))
     instance = db.relationship('Instance', back_populates='users')
-    reunions = db.relationship('Reunion', back_populates='user')
     verification_code = db.Column(db.String(10))  # Ajoutez cette ligne pour l'attribut verification_code
     is_archived = db.Column(db.Boolean, default=False)  # Nouveau champ pour indiquer si l'utilisateur est archivé
     is_active = db.Column(db.Boolean, default=False)  # Champ pour indiquer si l'utilisateur est actif
-
+    reunions = db.relationship('UserReunion', back_populates='user')
     
-#aaaaaa
-
     def __repr__(self):
         return f'<User {self.firstName} {self.id}>'
 
     def serialize(self):
         role_name = self.role.name if self.role else None
+        instance_name = self.instance.instance_name if self.instance else None
+        nb_conseilles = self.instance.nombre_conseille if self.instance else None
+
         return {
             "id": self.id,
             "firstName": self.firstName,
@@ -43,9 +44,12 @@ class Users(db.Model):
             "role_name": role_name,
             "created_at": self.created_at,
             "profile_image": self.profile_image,
+            "nameAdminPublique": self.nameAdminPublique,
             "phoneNumber": self.phoneNumber,  # Ajout du numéro de téléphone
             "address": self.address, # Ajout de l'adresse
-            "is_archived": self.is_archived
+            "is_archived": self.is_archived,
+            "instance_name": instance_name,
+            "nb_conseilles": nb_conseilles  # Ajoutez le nombre de conseillers à la sérialisation de l'utilisateur
         }
 class Instance(db.Model):
     __tablename__ = "instances"
@@ -72,14 +76,14 @@ class Instance(db.Model):
             "created_at": self.created_at,
         }
 
-class SentEmail(db.Model):
-    __tablename__ = 'sent_emails'
+# class SentEmail(db.Model):
+#     __tablename__ = 'sent_emails'
 
-    id = db.Column(db.Integer, primary_key=True)
-    president_email = db.Column(db.String(255), nullable=False)
-    subject = db.Column(db.String(255), nullable=False)
-    body = db.Column(db.Text, nullable=False)
-    sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+#     id = db.Column(db.Integer, primary_key=True)
+#     president_email = db.Column(db.String(255), nullable=False)
+#     subject = db.Column(db.String(255), nullable=False)
+#     body = db.Column(db.Text, nullable=False)
+#     sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
 class ArchivedUser(db.Model):
@@ -116,36 +120,42 @@ class Role(db.Model):
 class ProgrammeVisite(db.Model):
     __tablename__ = "ProgrammeVisite"
     id = db.Column(db.Integer, primary_key=True)
-    periode_debut = db.Column(db.DateTime(timezone=True), nullable=False)
-    periode_fin = db.Column(db.DateTime(timezone=True), nullable=False)
-    criteres_evaluation = db.Column(db.String(500), nullable=False)
+    nomProgramme = db.Column(db.Text)
+    periode_debut = db.Column(db.DateTime(timezone=True))
+    periode_fin = db.Column(db.DateTime(timezone=True))
+    criteres_evaluation = db.Column(db.String(500))
     lieu = db.Column(db.String(200))  
+    nomAdminPublique = db.Column(db.String(200))  
     description = db.Column(db.Text)   
     contacts_urgence = db.Column(db.String(200))  
     documents_joints = db.Column(db.String(500))  
     user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
-    conseiller_email = db.Column(db.String(100), nullable=False)  
-    admin_email = db.Column(db.String(100), nullable=False)
+    conseiller_email = db.Column(db.String(100))  
+    statut = db.Column(db.String(20))
+    admin_email = db.Column(db.String(100))
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     user = db.relationship('Users', back_populates='programmes_visite')
-    resultat = db.relationship('Resultat', back_populates='programme', uselist=False)  # Nouvelle relation
+    resultat = db.relationship('Resultat', back_populates='programme', uselist=False) 
     
     
     def serialize(self):
         return {
             'id': self.id,
+            'nomProgramme': self.nomProgramme,
             'periode_debut': self.periode_debut.isoformat(),
             'periode_fin': self.periode_fin.isoformat(),
             'criteres_evaluation': self.criteres_evaluation,
             'lieu': self.lieu,
+            'nomAdminPublique': self.nomAdminPublique,
             'description': self.description,
             'contacts_urgence': self.contacts_urgence,
+            'conseiller_email': self.conseiller_email,
+            'admin_email': self.admin_email,
+            'statut':self.statut,
             'documents_joints': self.documents_joints,
             'created_at': self.created_at.isoformat(),
         }
         
-        
-    
     
         
 class Resultat(db.Model):
@@ -155,7 +165,6 @@ class Resultat(db.Model):
     evaluations = db.Column(db.Text, nullable=False)
     recommendations = db.Column(db.Text, nullable=False)
     rapportPdf = db.Column(db.LargeBinary)
-    statut = db.Column(db.String(20))
     programme_id = db.Column(db.Integer, db.ForeignKey('ProgrammeVisite.id'), unique=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     programme = db.relationship("ProgrammeVisite", back_populates="resultat")
@@ -168,37 +177,63 @@ class Resultat(db.Model):
             'evaluations': self.evaluations,
             'recommendations': self.recommendations,
             'rapportPdf': self.rapportPdf,
-            'statut':self.statut,
             'user_id': self.user_id,
             'programme_id': self.programme_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             
         }
 
+
+
 class Reunion(db.Model):
-    __tablename__ = 'Reunion'
+    __tablename__ = 'Reunions'
     id = db.Column(db.Integer, primary_key=True)
     type_reunion = db.Column(db.String(20))
+    lien_meet = db.Column(db.Text)
     date = db.Column(db.Date)
     heure = db.Column(db.Time)
-    lieu = db.Column(db.String(100))
+    lieu = db.Column(db.String(250))
     ordre_du_jour = db.Column(db.Text)
-    statut = db.Column(db.String(20))
-    user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))  # Clé étrangère vers Users
+    statut = db.Column(db.String(50))
+    pv_path = db.Column(db.String(250))
+    users = db.relationship('UserReunion', back_populates='reunion')
 
-    # Relation avec Users
-    user = db.relationship('Users', back_populates='reunions')
 
+    def __repr__(self):
+        return f'<Reunion {self.date} {self.heure}>'
 
     def serialize(self):
-        serialized_data = {
-            'id': self.id,
-            'type_reunion': self.type_reunion,
-            'date': self.date.isoformat() if self.date else None,
-            'heure': self.heure.isoformat() if self.heure else None,
-            'lieu': self.lieu,
-            'ordre_du_jour': self.ordre_du_jour,
-            'statut': self.statut,
-            'user': self.user.serialize() if self.user else None
+        return {
+            "id": self.id,
+            "type_reunion": self.type_reunion,
+            "lien_meet": self.lien_meet,
+            "date": self.date.isoformat(),
+            "heure": self.heure.isoformat(),
+            "lieu": self.lieu,
+            "ordre_du_jour": self.ordre_du_jour,
+            "statut": self.statut,
+            "pv_path": self.pv_path,
+            "participants": [ur.user.serialize() for ur in self.users]
+
         }
-        return serialized_data
+        
+    
+class UserReunion(db.Model):
+    __tablename__ = 'user_reunion'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('Users.id'), nullable=False)
+    reunion_id = db.Column(db.Integer, db.ForeignKey('Reunions.id'), nullable=False)
+    presence = db.Column(db.Boolean, default=True)  # Ajouter ce champ pour marquer la présence
+    user = db.relationship('Users', back_populates='reunions')
+    reunion = db.relationship('Reunion', back_populates='users')
+
+    def __repr__(self):
+        return f'<UserReunion user_id={self.user_id} reunion_id={self.reunion_id}>'
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "user": self.user.serialize(),
+            "reunion": self.reunion.serialize(),
+            "presence": self.presence  # Ajouter la présence à la sérialisation
+        }

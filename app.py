@@ -1,7 +1,7 @@
 from functools import wraps
 from sqlalchemy.sql import func
 from . import app, db
-from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat,SentEmail
+from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat,UserReunion
 from sqlalchemy import event
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt as pyjwt
@@ -11,7 +11,7 @@ import os
 from flask_mail import Mail, Message
 from flask_jwt_extended import jwt_required, create_access_token, JWTManager, get_jwt_identity, get_jwt, create_refresh_token
 import json
-from flask import Flask, jsonify, request, make_response,redirect, url_for
+from flask import Flask, jsonify, request, make_response,redirect, url_for,session
 from flask_cors import CORS
 from flask import Flask, jsonify, request, make_response, flash,send_file,abort
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -44,7 +44,7 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
 # Génération d'une clé secrète aléatoire
 secret_key = os.urandom(24).hex()
 app.config['JWT_TOKEN_LOCATION'] = ['headers', 'cookies']  # Configurez l'emplacement du jeton JWT
-app.config['JWT_SECRET_KEY'] = secret_key  # Configurez la clé secrète JWT
+app.config['JWT_SECRET_KEY'] = 'ons'  # Configurez la clé secrète JWT
 # Configuration de l'application Flask avec la clé secrète
 app.config['SECRET_KEY'] = secret_key
 # Configuration de Flask-Mail avec vos coordonnées
@@ -228,43 +228,246 @@ def resend_email_to_president(instance_id):
 @app.route("/login", methods=["POST"])
 def login():
     auth = request.json
-    email = auth.get("email")  # Retrieve email from the request
-    password = auth.get("password")  # Retrieve password from the request
+    email = auth.get("email")  # Récupérer l'email de la requête
+    password = auth.get("password")  # Récupérer le mot de passe de la requête
 
-    # Log connection data in the console
-    print(f"Email: {email}, Password: {password}")
 
-    # Find the user in the database by email
+    # Enregistrer les données de connexion dans la console
+    print(f"Email: {email}, Mot de passe: {password}")
+
+    # Trouver l'utilisateur dans la base de données par son email
     user = Users.query.filter_by(email=email).first()
     if not user:
-        return jsonify({"message": "User not found"}), 404
+        return jsonify({"message": "Utilisateur non trouvé"}), 404
 
-    # Check password
-    if check_password_hash(user.password, password):
-        # Check if the user account is archived
-        if user.is_archived:
-            return jsonify({"message": "Your account is archived. Please contact the administrator."}), 401
-        # Proceed with login if the user account is not archived
-        token_payload = {
-            'id': user.id,
-            'role': user.role.name if user.role else None,
-            'email': user.email,
-            'firstName': user.firstName,
-            'lastName': user.lastName,
-            "phoneNumber": user.phoneNumber,
-            "address": user.address,
-            "profile_image": user.profile_image       # Return profile image binary data
-        }
-        # Generate JWT token
-        token = create_access_token(identity=token_payload)
-        
-        # Return user profile information with the access token
-        return jsonify({"token": token, "profile": token_payload}), 200
+    # Vérifier le mot de passe seulement si l'utilisateur existe
+    if not check_password_hash(user.password, password):
+        return jsonify({'message': 'Veuillez vérifier vos informations de connexion'}), 401
+    
+    # Vérifier si le compte utilisateur est archivé
+    if user.is_archived:
+        return jsonify({"message": "Votre compte est archivé. Veuillez contacter l'administrateur."}), 401
+
+    print(f"ID de l'utilisateur connecté : {user.id}")
+
+
+    # Obtenir l'ID de l'instance associée à l'utilisateur
+    instance_id = user.instance_id
+
+    # Récupérer l'objet Instance correspondant à l'ID de l'instance
+    instance = Instance.query.get(instance_id)
+
+    # Extraire l'ID de l'instance
+    instance_id = instance.id if instance else None
+
+    # Créer la charge utile du jeton avec l'ID de l'instance inclus
+    token_payload = {
+        'id': user.id,
+        'role': user.role.name if user.role else None,
+        'email': user.email,
+        'firstName': user.firstName,
+        'lastName': user.lastName,
+        "phoneNumber": user.phoneNumber,
+        "address": user.address,
+        "profile_image": user.profile_image,
+        "instance_id": instance_id  # Inclure l'ID de l'instance dans la charge utile du jeton
+    }
+
+    # Générer le jeton JWT
+    token = create_access_token(identity=token_payload)
+    
+    # Retourner les informations du profil utilisateur avec le jeton d'accès
+    return jsonify({"token": token, "profile": token_payload}), 200
+
+
+
+
+
+@app.route('/user/<int:user_id>/conseillers', methods=['GET'])
+def get_nb_conseillers(user_id):
+    user = Users.query.get(user_id)
+    if user is None:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'nb_conseillers': user.instance.nombre_conseille})
+
+@app.route('/user/<int:user_id>/inst', methods=['GET'])
+def get_inst(user_id):
+    user = Users.query.get(user_id)
+
+    if user is None:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'nom_instance': user.instance.id})
+
+
+
+def send_invitation_email(email, instance_name, ville, new_user_id):
+    try:
+        # Lien d'inscription
+        signup_link = "http://localhost:3000/signup"
+
+        # Créer le message d'e-mail avec le lien d'inscription
+        message_body = (f"Bienvenue,\n\n"
+                        f"Vous avez été invité à rejoindre l'instance '{instance_name}' située à {ville}.\n\n"
+                        f"Pour vous inscrire, veuillez cliquer sur le lien suivant :\n"
+                        f"{signup_link}\n\n"
+                        f"Merci de votre participation.\n\n"
+                        f"Cordialement,\nVotre application")
+
+        # Envoyer l'e-mail
+        message = Message(subject="Invitation à rejoindre l'instance",
+                          recipients=[email],
+                          body=message_body)
+
+        mail.send(message)  # Assurez-vous d'avoir configuré Flask-Mail correctement dans votre application
+    except Exception as e:
+        print("Error sending email:", e)
+
+from flask import request, jsonify
+import requests
+
+@app.route('/addConseille', methods=['POST'])
+def add_conseille():
+    data = request.json
+    user_id = data.get('user_id')
+    counselors = data.get('counselors')
+
+    print(f"ID de l'utilisateur qui fait la requête : {user_id}")
+
+
+    # Récupérer l'ID de l'instance de l'utilisateur
+    instance_id_response = requests.get(f'http://localhost:5000/user/{user_id}/inst')
+    if instance_id_response.status_code == 200:
+        instance_info = instance_id_response.json()
+        instance_id = instance_info.get('nom_instance')  # Récupérer l'ID de l'instance
+        instance_name = instance_info.get('nom_instance')  # Vous avez besoin du nom de l'instance?
+        user_email = instance_info.get('email')  # Vous avez besoin de l'email de l'instance?
     else:
-        # Return error message if credentials do not match
-        return jsonify({'message': 'Please check your credentials'}), 401
+        return jsonify({'error': 'Failed to retrieve instance information'}), 500
 
 
+    # Ajouter les conseillers et envoyer les invitations
+    for counselor in counselors:
+        email = counselor.get('email')
+
+        # Créer un nouvel utilisateur avec l'ID de l'instance
+        new_user = Users(instance_id=instance_id)
+        db.session.add(new_user)
+        db.session.flush()  # Flusher pour obtenir new_user.id avant le commit
+
+        # Envoyer l'invitation à l'utilisateur nouvellement ajouté
+        send_invitation_emailConseille(email, instance_name, new_user.id)
+
+    db.session.commit()
+
+    return jsonify({'message': 'Conseillers ajoutés avec succès'}), 200
+
+
+
+def send_invitation_emailConseille(email, instance_name, new_user_id):
+    try:
+        # Lien d'inscription avec instance_name et new_user_id
+        signup_link = f"http://localhost:3000/register/{new_user_id}"
+
+        # Créer le message d'e-mail avec le lien d'inscription
+        message_body = (f"Bienvenue,\n\n"
+                        f"Vous avez été invité à rejoindre l'instance '{instance_name}'.\n\n"
+                        f"Pour vous inscrire, veuillez cliquer sur le lien suivant :\n"
+                        f"{signup_link}\n\n"
+                        f"Merci de votre participation.\n\n"
+                        f"Cordialement,\nVotre application")
+
+        # Envoyer l'e-mail
+        message = Message(subject="Invitation à rejoindre l'instance",
+                          recipients=[email],
+                          body=message_body)
+
+        mail.send(message)  # Assurez-vous d'avoir configuré Flask-Mail correctement dans votre application
+    except Exception as e:
+        print("Error sending email:", e)
+
+
+@app.route('/register/<int:new_user_id>', methods=['POST'])
+def register(new_user_id):
+    try:
+        # Extraire les données du formulaire
+        first_name = request.form.get('firstName')
+        last_name = request.form.get('lastName')
+        email = request.form.get('email')
+        address = request.form.get('address')
+        phone_number = request.form.get('phoneNumber')
+
+        # Gérer le fichier d'avatar
+        if 'avatar' not in request.files:
+            return jsonify({"message": "Aucun fichier d'avatar n'a été envoyé"}), 400
+
+        avatar = request.files['avatar']
+
+        # Vérifier si aucun fichier n'a été sélectionné
+        if avatar.filename == '':
+            return jsonify({"message": "Aucun fichier sélectionné"}), 400
+
+        # Sécuriser le nom du fichier et enregistrer l'avatar
+        avatar_filename = secure_filename(avatar.filename)
+        avatar_path = os.path.join(app.config['UPLOAD_IMAGE'], avatar_filename)
+        avatar.save(avatar_path)
+
+        # Extraire l'ID du rôle 'conseiller'
+        role_conseiller = Role.query.filter_by(name='conseiller').first()
+        if not role_conseiller:
+            return jsonify({'error': 'Role conseiller not found'}), 404
+        role_id = role_conseiller.id
+
+        # Rechercher l'utilisateur dans la base de données par son ID
+        existing_user = Users.query.get(new_user_id)
+        if not existing_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Mettre à jour les détails de l'utilisateur
+        existing_user.firstName = first_name
+        existing_user.lastName = last_name
+        existing_user.email = email
+        existing_user.profile_image = avatar_filename
+        existing_user.address = address
+        existing_user.phoneNumber = phone_number
+        existing_user.role_id = role_id
+        existing_user.is_active = True  # Mettre à jour is_active à 'true'
+
+        # Enregistrer les modifications dans la base de données
+        db.session.commit()
+
+        return jsonify({'message': 'User registered successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+from flask import request, jsonify
+
+@app.route('/add_password/<int:new_user_id>', methods=['POST'])
+def add_password(new_user_id):
+    try:
+        # Extraire le mot de passe et sa confirmation du formulaire
+        password = request.json.get('password')
+        confirm_password = request.json.get('confirmPassword')  # Assurez-vous que le nom du champ est correct
+
+        # Vérifier si les mots de passe correspondent
+        if password != confirm_password:
+            return jsonify({"error": "Les mots de passe ne correspondent pas"}), 400
+
+        # Hasher le mot de passe
+        hashed_password = generate_password_hash(password)
+
+        # Rechercher l'utilisateur dans la base de données par son ID
+        existing_user = Users.query.get(new_user_id)
+        if not existing_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        # Mettre à jour le mot de passe de l'utilisateur
+        existing_user.password = hashed_password
+
+        # Enregistrer les modifications dans la base de données
+        db.session.commit()
+
+        return jsonify({'message': 'Mot de passe ajouté avec succès'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/images/<filename>')
@@ -598,9 +801,6 @@ def addInstance():
 
 
 
-
-
-
 @app.route("/instances", methods=["GET"])
 def get_all_instances():
     try:
@@ -821,65 +1021,6 @@ def change_password():
 
     return jsonify({'message': 'Password updated successfully'}), 200
 
-from flask import request, jsonify
-
-# Créer une réunion
-@app.route('/reunions', methods=['POST'])
-def create_reunion():
-    data = request.json
-    type_reunion = data.get('type_reunion')  # Récupérer le type de réunion depuis les données JSON
-    new_reunion = Reunion(
-        type_reunion=type_reunion,  # Enregistrer le type de réunion dans la base de données
-        date=data.get('date'),
-        heure=data.get('heure'),
-        lieu=data.get('lieu'),
-        ordre_du_jour=data.get('ordre_du_jour'),
-        statut=data.get('statut')
-    )
-    db.session.add(new_reunion)
-    db.session.commit()
-    return jsonify({'message': 'Reunion created successfully'}), 201
-
-
-# Obtenir toutes les réunions
-@app.route('/reunions', methods=['GET'])
-def get_all_reunions():
-    reunions = Reunion.query.all()
-    return jsonify([reunion.serialize() for reunion in reunions]), 200
-
-# Obtenir une réunion par ID
-@app.route('/reunions/<int:reunion_id>', methods=['GET'])
-def get_reunion_by_id(reunion_id):
-    reunion = Reunion.query.get(reunion_id)
-    if not reunion:
-        return jsonify({'message': 'Reunion not found'}), 404
-    return jsonify(reunion.serialize()), 200
-
-# Mettre à jour une réunion
-@app.route('/reunions/<int:reunion_id>', methods=['PUT'])
-def update_reunion(reunion_id):
-    data = request.json
-    reunion = Reunion.query.get(reunion_id)
-    if not reunion:
-        return jsonify({'message': 'Reunion not found'}), 404
-    reunion.type_reunion = data['type_reunion']
-    reunion.date = data['date']
-    reunion.heure = data['heure']
-    reunion.lieu = data['lieu']
-    reunion.ordre_du_jour = data['ordre_du_jour']
-    reunion.statut = data['statut']
-    db.session.commit()
-    return jsonify({'message': 'Reunion updated successfully'}), 200
-
-# Supprimer une réunion
-@app.route('/reunions/<int:reunion_id>', methods=['DELETE'])
-def delete_reunion(reunion_id):
-    reunion = Reunion.query.get(reunion_id)
-    if not reunion:
-        return jsonify({'message': 'Reunion not found'}), 404
-    db.session.delete(reunion)
-    db.session.commit()
-    return jsonify({'message': 'Reunion deleted successfully'}), 200
 
 import random
 import string
@@ -935,14 +1076,51 @@ def reset_password():
     else:
         return jsonify({'message': 'Adresse e-mail ou code de vérification incorrect'}), 400
 
+@app.route('/getlistconseille', methods=['GET'])
+@jwt_required()
+def get_list_conseille():
+    try:
+        # Afficher un message indiquant que la route a été appelée
+        print("Route /getlistconseille a été appelée")
 
+        # Récupérer l'ID de l'utilisateur connecté depuis le JWT
+        user_identity = get_jwt_identity()
 
+        # Afficher l'ID de l'utilisateur connecté
+        print(f"ID de l'utilisateur connecté : {user_identity['id']}")
 
+        # Récupérer l'instance de l'utilisateur connecté
+        instance_id_response = requests.get(f'http://localhost:5000/user/{user_identity["id"]}/inst')
+        if instance_id_response.status_code == 200:
+            instance_info = instance_id_response.json()
+            instance_id = instance_info.get('nom_instance')  # Récupérer l'ID de l'instance
 
+            # Afficher l'ID de l'instance
+            print(f"ID de l'instance récupérée : {instance_id}")
 
+            if not instance_id:
+                print("Instance ID not found in the response")
+                return jsonify({'error': 'Instance ID not found in the response'}), 500
+        else:
+            print("Failed to retrieve instance information")
+            return jsonify({'error': 'Failed to retrieve instance information'}), 500
 
+        # Récupérer tous les utilisateurs avec le rôle de conseiller (role_id = 3) et le même ID d'instance
+        counselors = Users.query.filter_by(instance_id=instance_id, role_id=3).all()
 
+        # Afficher le nombre de conseillers trouvés
+        print(f"Nombre de conseillers trouvés : {len(counselors)}")
 
+        # Sérialiser les conseillers
+        serialized_counselors = [counselor.serialize() for counselor in counselors]
+
+        # Afficher les conseillers sérialisés
+        print(f"Conseillers sérialisés : {serialized_counselors}")
+
+        return jsonify(serialized_counselors), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Une erreur s\'est produite lors de la récupération des conseillers'}), 500
 
 
 
@@ -957,14 +1135,14 @@ def reset_password():
 
 
 
-@app.route('/user_info', methods=['GET'])
-def get_user_info():
-    email = request.args.get('email')
-    user = Users.query.filter_by(email=email).first()
-    if user:
-        return jsonify({'firstName': user.firstName, 'lastName': user.lastName}), 200
-    else:
-        return jsonify({'error': 'Utilisateur non trouvé'}), 404
+# @app.route('/user_info', methods=['GET'])
+# def get_user_info():
+#     email = request.args.get('email')
+#     user = Users.query.filter_by(email=email).first()
+#     if user:
+#         return jsonify({'firstName': user.firstName, 'lastName': user.lastName}), 200
+#     else:
+#         return jsonify({'error': 'Utilisateur non trouvé'}), 404
 
 
 
@@ -989,7 +1167,6 @@ def get_all_users():
 
 from sqlalchemy import or_
 
-
 @app.route('/programme_visite', methods=['POST'])
 def create_programme_visite():
     data = request.get_json()
@@ -1007,7 +1184,9 @@ def create_programme_visite():
                 contacts_urgence=data['contacts_urgence'],
                 user_id=user.id,
                 conseiller_email=user.email,
-                admin_email=data['admin_email']
+                admin_email=data['admin_email'],
+                nomProgramme=data['nomProgramme'],
+                nomAdminPublique=data['nomAdminPublique']
             )
             db.session.add(new_programme)
         
@@ -1015,6 +1194,19 @@ def create_programme_visite():
         return jsonify({"message": "Programme de visite créé avec succès "}), 201
     else:
         return jsonify({"message": "Aucun utilisateur trouvé"}), 404
+
+
+
+@app.route('/get_admin_name', methods=['GET'])
+def get_admin_name():
+    admin_email = request.args.get('admin_email')  # Récupérer l'email de l'administration publique depuis la requête
+    admin_user = Users.query.filter_by(email=admin_email).first()
+    if admin_user:
+        admin_first_name = admin_user.firstName
+        admin_last_name = admin_user.lastName
+        return {"firstName": admin_first_name, "lastName": admin_last_name}
+    else:
+        return "Aucun utilisateur trouvé pour cet e-mail."
 
 
 
@@ -1032,24 +1224,32 @@ def create_programme_visite():
 
 #from flask_mail import Message
 
+
 @app.route('/send_email', methods=['POST'])
 def send_email():
-    try:
-        data = request.json
-        conseillers = data['conseillers']
-        emailData = data['emailData']
-        subject = emailData['subject']
-        content = emailData['content']
-
-        # Envoi de l'e-mail à chaque conseiller
-        for conseiller in conseillers:
-            msg = Message(subject, sender=app.config['MAIL_USERNAME'], recipients=[conseiller])
-            msg.body = content
+    data = request.json
+    emailData = data['emailData']
+    admin_email = data.get('admin_email')  # Vérifier si l'e-mail de l'administration est fourni
+    conseillers = data.get('conseillers')
+    
+    # Envoyer l'e-mail aux conseillers
+    if conseillers:
+        for conseiller_email in conseillers:
+            msg = Message(emailData['subject'], recipients=[conseiller_email])
+            msg.body = emailData['content']
             mail.send(msg)
+    
+    # Envoyer l'e-mail à l'administration
+    if admin_email:
+        msg_admin = Message(emailData['subject'], recipients=[admin_email])
+        msg_admin.body = emailData['content']
+        mail.send(msg_admin)
+    
+    return jsonify({'message': 'E-mails envoyés avec succès'}), 200
 
-        return jsonify({'message': 'E-mails envoyés avec succès'}), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    
+    
+    
 
 @app.route('/ListeVisiteEvaluation', methods=['GET'])
 def get_programmes_visite():
@@ -1116,6 +1316,25 @@ from reportlab.lib.pagesizes import letter
 
 UPLOAD_FOLDER = 'static/pdfRapport'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+import requests
+import fitz
+import os
+
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from babel.dates import format_datetime
+import datetime
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+
+
+
+
+
+# -------------------------------créer evaluation-----------------------------------------
+
 
 @app.route('/evaluation/<int:programme_id>', methods=['POST'])
 def submit_evaluation(programme_id):
@@ -1126,8 +1345,15 @@ def submit_evaluation(programme_id):
     evaluations = data.get('evaluations')
     recommendations = data.get('recommendations')
 
-    # Enregistre l'évaluation dans la base de données
     try:
+        # Récupérer les informations sur le programme de visite à partir de la base de données
+        programme_visite = ProgrammeVisite.query.get(programme_id)
+        lieu = programme_visite.lieu  # Supposons que le lieu soit un attribut de votre modèle ProgrammeVisite
+        periode_debut = format_datetime(programme_visite.periode_debut, format='d MMMM yyyy', locale='fr_FR')
+        description = programme_visite.description
+        nom_programme = programme_visite.nomProgramme
+
+        # Enregistre l'évaluation dans la base de données
         new_evaluation = Resultat(
             programme_id=programme_id,
             observations=observations,
@@ -1141,18 +1367,63 @@ def submit_evaluation(programme_id):
         pdf_io = BytesIO()
 
         # Crée le PDF en utilisant pdf_io comme fichier en mémoire
-        p = canvas.Canvas(pdf_io)
-        p.drawString(100, 750, f"Observations: {observations}")
-        p.drawString(100, 735, f"Évaluations: {evaluations}")
-        p.drawString(100, 720, f"Recommandations: {recommendations}")
-        p.showPage()
-        p.save()
+        doc = SimpleDocTemplate(pdf_io, pagesize=letter)
+
+        # Prépare le contenu du PDF
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'Title',
+            parent=styles['Heading1'],
+            fontName='Helvetica-Bold',
+            fontSize=18,  # Augmentez la taille de la police ici
+            alignment=TA_CENTER,
+            spaceAfter=12,
+        )
+        bold_style = ParagraphStyle(
+            'Normal',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold'
+        )
+        Story = []  # Supprimez le Spacer ici
+
+        # Ajoute le texte au PDF
+        text = f"""
+        <para align=center><b>Rapport d'Évaluation</b></para>
+
+        <b>Programme de Visite:</b> {nom_programme}
+        <b>Lieu :</b> {lieu}
+        <b>date :</b> {periode_debut}
+        <b>Évalué par:</b> [Nom de l'évaluateur]
+        <b>Introduction</b>
+        Le cadre de notre engagement continu envers l’amélioration de la gouvernance locale, une visite d’évaluation a été effectuée au {lieu} le {periode_debut}. Cette visite s’inscrit dans une série d’efforts visant à optimiser les services offerts aux citoyens et à renforcer la transparence des opérations des conseils locaux.
+        <b>Objectifs de la Visite :</b>
+        {description}
+        <b>Observations et Évaluations</b>
+        Les observations faites lors de la visite ont révélé que :
+        {observations}
+        <b>Recommandations</b>
+        Sur la base des évaluations, nous recommandons les actions suivantes :
+        {recommendations}
+        Ce rapport, synthétisant nos observations, évaluations et recommandations, sera partagé avec la communauté via notre page Facebook pour garantir une transparence totale et encourager une participation citoyenne active dans le processus d’amélioration continue.
+        <b>Conclusion</b>
+        Cette visite a permis de mettre en lumière les forces et les faiblesses des services évalués. Les recommandations fournies visent à guider les efforts d’amélioration continue. Nous restons dédiés à l’excellence dans la prestation de services aux citoyens et à la promotion d’une gouvernance locale efficace et transparente.
+        """
+        for line in text.split('\n'):
+            p = Paragraph(line, bold_style if any(keyword in line for keyword in ["Lieu", "Date", "Introduction", "Objectifs de la Visite", "Observations", "Évaluations", "Recommandations"]) else styles["Normal"])
+            Story.append(p)
+            Story.append(Spacer(1,0.2*inch))
+
+        # Construit le PDF
+        doc.build(Story)
 
         # Sauvegarde le PDF sur le serveur
         pdf_filename = f"evaluation_{programme_id}.pdf"
         pdf_io.seek(0)
         with open(os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename), 'wb') as f:
             f.write(pdf_io.read())
+
+        # Partage automatique sur Facebook
+        share_on_facebook(pdf_filename)  # Assurez-vous d'implémenter cette fonction
 
         # Retourne le PDF comme réponse
         pdf_io.seek(0)
@@ -1164,10 +1435,51 @@ def submit_evaluation(programme_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
     
+
+
     
-    
-    
-from flask import send_from_directory
+def share_on_facebook(pdf_filename):
+    # Ouvrir le fichier PDF
+    pdf_file_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+    doc = fitz.open(pdf_file_path)
+
+    # Récupérer la première image de la première page du PDF
+    page = doc.load_page(0)
+    pixmap = page.get_pixmap()
+
+    # Créer un fichier temporaire pour stocker l'image
+    image_temp_path = "temp_image.jpg"
+    pixmap.save(image_temp_path)
+
+    # Ouvrir le fichier image et le lire en tant que fichier binaire
+    with open(image_temp_path, "rb") as file:
+        image_content = file.read()
+
+    # Créer les données de la requête pour télécharger l'image en tant que pièce jointe
+    files = {
+        "file": ("temp_image.jpg", image_content, "image/jpeg")
+    }
+
+    # Créer les données pour la publication sur Facebook
+    data = {
+        "message": "Voici le rapport d'évaluation",
+        "published": "true",
+    }
+
+    # Ajouter les en-têtes nécessaires (y compris l'autorisation)
+    headers = {
+        "Authorization": "Bearer EAANo3OC0ZC0oBO8g6XCs4OB7WSsxwA0nMZBKcNFRBswU9c9G34ZB5PqwpYDGZAQ5jSqTtiwFnu6cueBeUCYyBnQWCDeiPmToqovTLdFqx9zluRCYPmJy1tJ0iLqUjlnfRWNdGRPy2hdlCmT92oW8jMllHtKAB7grtii7bB9ykVhtMfXF22daxnSIZCbyfV9ImG8bju2Bq02tqujDZCceEXt49ikbA9cvgZD"
+    }
+
+    # Envoyer la requête pour télécharger l'image
+    response = requests.post("https://graph.facebook.com/v19.0/261223573746767/photos", headers=headers, data=data, files=files)
+
+    # Afficher la réponse
+    print(response.json())
+
+
+
+
 
 @app.route('/programmes_visite/<int:programme_id>/rapport', methods=['GET'])
 def get_programme_rapport(programme_id):
@@ -1179,6 +1491,10 @@ def get_programme_rapport(programme_id):
         if not programme:
             return jsonify({'error': 'Programme de visite non trouvé'}), 404
         
+        # Vérifier si le programme a un résultat associé
+        if not programme.resultat:
+            return jsonify({'error': 'Aucun rapport associé à ce programme de visite'}), 404
+        
         # Vérifier si le fichier PDF existe sur le serveur
         pdf_filename = f"evaluation_{programme_id}.pdf"
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
@@ -1189,16 +1505,245 @@ def get_programme_rapport(programme_id):
         return send_from_directory(app.config['UPLOAD_FOLDER'], pdf_filename, as_attachment=True)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/programmes_visite/<int:programme_id>/statut', methods=['PUT'])
+def update_programme_statut(programme_id):
+    new_statut = request.json.get('statut')
+    programme = ProgrammeVisite.query.get(programme_id)
+    if programme:
+        programme.statut = new_statut
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Statut mis à jour avec succès.'}), 200
+    else:
+        return jsonify({'success': False, 'message': 'Programme de visite non trouvé.'}), 404
     
     
     
-    
-    
+
+@app.route('/archived_programmes_visite')
+def get_archived_programmes_visite():
+    # Récupérez les programmes de visites clôturés depuis la base de données
+    archived_programmes_visite = ProgrammeVisite.query.filter_by(statut='Clôturé').all()
+    # Serialisez les données au format JSON
+    serialized_archived_programmes_visite = [programme.serialize() for programme in archived_programmes_visite]
+    # Renvoyez les données JSON
+    return jsonify(serialized_archived_programmes_visite)
+
+
+
+
+# ----------------------------------------PV REUNION --------------------------------------------
+
+
+
+
+@app.route('/reunions', methods=['POST'])
+def ajouter_reunion():
+    try:
+        data = request.get_json()
+        type_reunion = data.get('type_reunion')
+        date = data.get('date')
+        heure = data.get('heure')
+        ordre_du_jour = data.get('ordre_du_jour')
+        participants_emails = data.get('participants')
+
+        if type_reunion == 'presentielle':
+            lieu = data.get('lieu')
+            nouvelle_reunion = Reunion(type_reunion=type_reunion, date=date, heure=heure, lieu=lieu, ordre_du_jour=ordre_du_jour)
+        elif type_reunion == 'meet':
+            lien_meet = data.get('lien_meet')
+            nouvelle_reunion = Reunion(type_reunion=type_reunion, date=date, heure=heure, lien_meet=lien_meet, ordre_du_jour=ordre_du_jour)
+        
+        db.session.add(nouvelle_reunion)
+        db.session.commit()
+
+        # Ajouter les participants à la réunion
+        for email in participants_emails:
+            user = Users.query.filter_by(email=email).first()
+            if user:
+                user_reunion = UserReunion(user_id=user.id, reunion_id=nouvelle_reunion.id)
+                db.session.add(user_reunion)
+        
+        db.session.commit()
+
+        # Envoyer les invitations par email
+        for email in participants_emails:
+            msg = Message(subject="Invitation à la réunion",
+                          recipients=[email],
+                          body=f"Nous avons le plaisir de vous inviter à la réunion du conseil local  qui se tiendra le {date} à {heure} ")
+            if type_reunion == 'presentielle':
+                msg.body += f"\nLieu: {lieu}"
+            elif type_reunion == 'meet':
+                msg.body += f"\nLien Meet: {lien_meet}"
+            mail.send(msg)
+
+        return jsonify({'message': 'Réunion ajoutée avec succès et invitations envoyées'}), 201
+    except Exception as e:
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
 
 
 
 
 
+
+@app.route('/reunions', methods=['GET'])
+def get_reunions():
+    try:
+        reunions = Reunion.query.all()
+        return jsonify([reunion.serialize() for reunion in reunions]), 200
+    except Exception as e:
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+
+
+
+
+
+
+@app.route('/reunions/<int:reunion_id>/participants/<int:user_id>/presence', methods=['PUT'])
+def update_presence(reunion_id, user_id):
+    data = request.get_json()
+    presence = data.get('presence')
+
+    if presence is None:
+        return jsonify({'error': 'Presence is required'}), 400
+
+    user_reunion = UserReunion.query.filter_by(reunion_id=reunion_id, user_id=user_id).first()
+
+    if not user_reunion:
+        return jsonify({'error': 'User or Reunion not found'}), 404
+
+    user_reunion.presence = presence
+    db.session.commit()
+
+    return jsonify({'message': 'Presence updated successfully'}), 200
+
+
+
+
+@app.route('/reunions/<int:reunion_id>', methods=['PUT'])
+def update_reunion_status(reunion_id):
+    data = request.get_json()
+    reunion = Reunion.query.get(reunion_id)
+    if 'statut' in data:
+        reunion.statut = data['statut']
+    db.session.commit()
+    return jsonify(reunion.serialize())
+
+
+
+@app.route('/conseillersReunions', methods=['GET'])
+def get_conseillers_reunions():
+    # Récupère tous les utilisateurs dont le rôle a le nom 'conseiller'
+    conseillers = Users.query.join(Role).filter(Role.name == 'conseiller').all()
+    # Sérialise les utilisateurs
+    serialized_conseillers = [user.serialize() for user in conseillers]
+    return jsonify(serialized_conseillers)
+
+
+
+@app.route('/conseillersReunionsEmails', methods=['GET'])
+def get_conseillers_emails():
+    # Récupère les emails des utilisateurs dont le rôle a le nom 'conseiller'
+    conseillers_emails = Users.query\
+        .join(Role)\
+        .filter(Role.name == 'conseiller')\
+        .with_entities(Users.email)\
+        .all()
+    
+    # Formatte les résultats en une liste d'emails
+    emails = [email[0] for email in conseillers_emails]
+    
+    return jsonify(emails)
+
+
+
+
+# UPLOAD_FOLDER = 'static/pdfRapport'
+# app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+
+UPLOAD_PVR = 'static/PV'
+app.config['UPLOAD_PVR'] = UPLOAD_PVR
+
+@app.route('/reunions/<int:reunion_id>/upload_pv', methods=['POST'])
+def upload_pv(reunion_id):
+    if 'pv_file' not in request.files:
+        return jsonify({"message": "No file part"}), 400
+    
+    file = request.files['pv_file']
+    
+    if file.filename == '':
+        return jsonify({"message": "No selected file"}), 400
+    
+    if file:
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_PVR'], filename)
+        file.save(file_path)
+        
+        reunion = Reunion.query.get(reunion_id)
+        if not reunion:
+            return jsonify({'message': 'Réunion non trouvée'}), 404
+        
+        reunion.pv_path = file_path
+        db.session.commit()
+        
+        # Envoyer un e-mail de notification à tous les participants
+        participants_emails = [user.user.email for user in reunion.users]
+        send_email_notification(participants_emails, reunion)
+        
+        return jsonify({'message': 'PV uploaded and notification sent successfully'}), 200
+
+    return jsonify({"message": "Unknown error occurred"}), 500
+
+def send_email_notification(participants_emails, reunion):
+    with app.app_context():
+        subject = "Nouveau procès-verbal disponible"
+        body = f"Le procès-verbal de la réunion du {reunion.date.strftime('%d/%m/%Y')} à {reunion.heure.strftime('%H:%M')} est désormais disponible."
+        
+        msg = Message(subject, sender=app.config['MAIL_USERNAME'], recipients=participants_emails)
+        msg.body = body
+        
+        mail.send(msg)
+
+
+
+
+@app.route('/reunions/<int:reunion_id>/participants', methods=['GET'])
+def get_reunion_participants(reunion_id):
+    participants = UserReunion.query.filter_by(reunion_id=reunion_id).all()
+    return jsonify([participant.serialize() for participant in participants])
+
+
+
+
+@app.route('/reunions/<int:reunion_id>/delete_pv', methods=['DELETE'])
+def delete_pv(reunion_id):
+    try:
+        reunion = Reunion.query.get(reunion_id)
+        if not reunion:
+            return jsonify({'error': 'Reunion not found'}), 404
+
+        pv_path = reunion.pv_path
+        if not pv_path:
+            return jsonify({'error': 'No PV to delete'}), 400
+
+        # Supprimer le fichier du système de fichiers
+        try:
+            os.remove(pv_path)
+        except OSError as e:
+            return jsonify({'error': f'Error deleting file: {str(e)}'}), 500
+
+        # Mettre à jour la base de données pour supprimer la référence au PV
+        reunion.pv_path = None
+        db.session.commit()
+
+        return jsonify({'message': 'PV deleted successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
+    
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
