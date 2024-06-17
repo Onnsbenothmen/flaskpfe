@@ -1,7 +1,7 @@
 from functools import wraps
 from sqlalchemy.sql import func
 from . import app, db
-from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat,UserReunion
+from .models import Users, Instance, Role,ProgrammeVisite,db,Reunion,ArchivedUser,Resultat,UserReunion,SentEmail,DemandeAccesInfo,Plainte,Proposition
 from sqlalchemy import event
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt as pyjwt
@@ -27,11 +27,10 @@ from io import BytesIO
 from itsdangerous import URLSafeTimedSerializer
 from flask import send_from_directory
 
+# CORS(app, supports_credentials=True)
 
-
-#app = Flask(__name__)
-#CORS(app)
-
+# app = Flask(__name__)
+CORS(app, supports_credentials=True)
 
 # Définition du dossier de téléchargement des fichiers
 UPLOAD_IMAGE = 'static/uploads'
@@ -113,10 +112,7 @@ def send_login_details(email, firstName, password, role_name):
 from flask import jsonify
 
 @app.route('/signup/<int:newUserId>', methods=['POST'])
-def signup(newUserId):  # Utilisez newUserId comme paramètre de route
-    roles = Role.query.all()
-    roles_data = [{"id": role.id, "name": role.name} for role in roles]
-
+def signup(newUserId):
     if 'avatar' not in request.files:
         return jsonify({"message": "Aucun fichier d'avatar n'a été envoyé"}), 400
 
@@ -135,32 +131,62 @@ def signup(newUserId):  # Utilisez newUserId comme paramètre de route
         password = request.form.get('password')
         phone_number = request.form.get('phoneNumber')
         address = request.form.get('address')
-
+        birth_date = request.form.get('birth_date')
+        cin = request.form.get('cin')
+        situation_familiale = request.form.get('situation_familiale')
+        ville = request.form.get('ville')
+        linkedin = request.form.get('linkedin')
+        lienFacebook = request.form.get('lienFacebook')
+        description_profil = request.form.get('description_profil')
         hashed_password = generate_password_hash(password)
 
-        # Rechercher l'utilisateur existant avec l'ID spécifié
-        existing_user = Users.query.filter_by(id=newUserId).first()
+        user = Users.query.get(newUserId)
 
-        if existing_user:
-            # Mettre à jour les champs de l'utilisateur existant avec les nouvelles données
-            existing_user.firstName = first_name
-            existing_user.lastName = last_name
-            existing_user.email = email
-            existing_user.password = hashed_password
-            existing_user.phoneNumber = phone_number
-            existing_user.address = address
-            existing_user.profile_image = filename
-            existing_user.is_active = True  # Modifier is_active en True
-
-
-            db.session.commit()
-
-            return jsonify({"message": "Utilisateur mis à jour avec succès"}), 200
+        if user:
+            # Mettre à jour l'utilisateur existant
+            user.firstName = first_name
+            user.lastName = last_name
+            user.email = email
+            user.password = hashed_password
+            user.phoneNumber = phone_number
+            user.address = address
+            user.profile_image = filename
+            user.birth_date = birth_date
+            user.cin = cin
+            user.situation_familiale = situation_familiale
+            user.ville = ville
+            user.linkedin = linkedin
+            user.lienFacebook = lienFacebook
+            user.description_profil = description_profil
+            message = "Utilisateur mis à jour avec succès"
         else:
-            return jsonify({"message": "Utilisateur non trouvé"}), 404
-    else:
-        return jsonify({"message": "Extension de fichier non autorisée"}), 400
+            # Créer un nouvel utilisateur
+            user = Users(
+                id=newUserId,
+                firstName=first_name,
+                lastName=last_name,
+                email=email,
+                password=hashed_password,
+                phoneNumber=phone_number,
+                address=address,
+                profile_image=filename,
+                is_active=True,
+                birth_date=birth_date,
+                cin=cin,
+                situation_familiale=situation_familiale,
+                ville=ville,
+                linkedin=linkedin,
+                lienFacebook=lienFacebook,
+                description_profil=description_profil,
+            )
+            db.session.add(user)
+            message = "Utilisateur créé avec succès"
 
+        db.session.commit()
+
+        return jsonify({"message": message}), 201
+    else:
+        return jsonify({"message": "Le fichier envoyé n'est pas autorisé"}), 400
 
 def send_email_to_president(president_email, instance_name, ville, new_user_id):
     try:
@@ -195,6 +221,79 @@ def send_email_to_president(president_email, instance_name, ville, new_user_id):
         db.session.commit()
     except Exception as e:
         print("Error sending email:", e)
+
+@app.route('/getlistConseillers')
+def get_list_conseillers():
+    role_conseiller = Role.query.filter_by(name='conseiller').first()
+    if role_conseiller:
+        conseillers = Users.query.filter_by(role_id=role_conseiller.id).all()
+        return jsonify([user.serialize() for user in conseillers])
+    else:
+        return jsonify({"error": "Role 'conseiller' not found"}), 404
+    
+    
+
+@app.route('/getlistAdministrations')
+def get_list_Administration():
+    role_Administration = Role.query.filter_by(name='directeur').first()
+    if role_Administration:
+        Administration = Users.query.filter_by(role_id=role_Administration.id).all()
+        return jsonify([user.serialize() for user in Administration])
+    else:
+        return jsonify({"error": "Role 'directeur' not found"}), 404
+    
+    
+@app.route('/deleteConseille/<int:id>', methods=['DELETE'])
+def delete_counselor(id):
+    counselor = Users.query.get_or_404(id)
+
+    db.session.delete(counselor)
+    db.session.commit()
+    return '', 204
+
+
+
+@app.route('/updateConseiller/<int:id>', methods=['PUT'])
+def update_counselor(id):
+    try:
+        # Récupérer les données de la requête
+        data = request.json
+        print(f"Data received for update: {data}")  # Ajoutez cette ligne pour vérifier les données reçues
+
+        # Rechercher le conseiller par ID
+        counselor = Users.query.get_or_404(id)
+
+
+        # Mettre à jour les champs du conseiller
+        if 'firstName' in data:
+            counselor.first_name = data['firstName']
+        if 'lastName' in data:
+            counselor.last_name = data['lastName']
+        if 'email' in data:
+            counselor.email = data['email']
+        if 'instance_id' in data:
+            instance_id = data['instance_id']
+            # Vérifier si l'instance existe
+            instance = Instance.query.get(instance_id)
+            if instance:
+                counselor.instance_id = instance_id
+            else:
+                return jsonify({"error": f"Instance with ID {instance_id} not found"}), 404
+
+        # Enregistrer les modifications dans la base de données
+        db.session.commit()
+        print(f"Updated counselor: {counselor.serialize()}")  # Ajoutez cette ligne pour vérifier les données mises à jour
+
+        return jsonify({"message": "Counselor updated successfully", "counselor": counselor.serialize()}), 200
+
+    except Exception as e:
+        print(e)
+        db.session.rollback()
+        return make_response({"message": "Unable to update counselor"}, 500)
+
+
+
+
 
 @app.route("/resendEmailToPresident/<int:instance_id>", methods=["POST"])
 def resend_email_to_president(instance_id):
@@ -270,7 +369,15 @@ def login():
         "phoneNumber": user.phoneNumber,
         "address": user.address,
         "profile_image": user.profile_image,
-        "instance_id": instance_id  # Inclure l'ID de l'instance dans la charge utile du jeton
+        "instance_id": instance_id , # Inclure l'ID de l'instance dans la charge utile du jeton
+        "birth_date": user.birth_date,  # Ajout de la date de naissance
+        "cin": user.cin,  # Ajout du CIN
+        "situation_familiale": user.situation_familiale , # Ajout de l'état
+        "ville": user.ville,  # Ajout de la ville
+        "linkedin": user.linkedin,
+        "lienFacebook" : user.lienFacebook,
+        "description_profil" : user.description_profil,
+        "created_at":user.created_at
     }
 
     # Générer le jeton JWT
@@ -280,8 +387,27 @@ def login():
     return jsonify({"token": token, "profile": token_payload}), 200
 
 
+@app.route('/user/<int:user_id>/inst', methods=['GET'])
+def get_inst(user_id):
+    user = Users.query.get(user_id)
 
+    if user is None:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'nom_instance': user.instance.id})
 
+@app.route('/user/<int:user_id>/instance_name', methods=['GET'])
+def get_instance_name(user_id):
+    user = Users.query.get(user_id)
+
+    if user is None:
+        return jsonify({'error': 'User not found'}), 404
+
+    instance = user.instance  # Utilisation de la relation définie dans le modèle Users
+
+    if instance is None:
+        return jsonify({'error': 'Instance not found'}), 404
+
+    return jsonify({'nom_instance': instance.instance_name})  # Utilisation de 'instance_name' comme attribut
 
 @app.route('/user/<int:user_id>/conseillers', methods=['GET'])
 def get_nb_conseillers(user_id):
@@ -290,13 +416,6 @@ def get_nb_conseillers(user_id):
         return jsonify({'error': 'User not found'}), 404
     return jsonify({'nb_conseillers': user.instance.nombre_conseille})
 
-@app.route('/user/<int:user_id>/inst', methods=['GET'])
-def get_inst(user_id):
-    user = Users.query.get(user_id)
-
-    if user is None:
-        return jsonify({'error': 'User not found'}), 404
-    return jsonify({'nom_instance': user.instance.id})
 
 
 
@@ -333,7 +452,6 @@ def add_conseille():
 
     print(f"ID de l'utilisateur qui fait la requête : {user_id}")
 
-
     # Récupérer l'ID de l'instance de l'utilisateur
     instance_id_response = requests.get(f'http://localhost:5000/user/{user_id}/inst')
     if instance_id_response.status_code == 200:
@@ -344,13 +462,18 @@ def add_conseille():
     else:
         return jsonify({'error': 'Failed to retrieve instance information'}), 500
 
+    # Récupérer l'ID du rôle conseiller
+    counselor_role = Role.query.filter_by(name='conseiller').first()
+    if not counselor_role:
+        return jsonify({'error': 'Role conseiller not found'}), 500
+    counselor_role_id = counselor_role.id
 
     # Ajouter les conseillers et envoyer les invitations
     for counselor in counselors:
         email = counselor.get('email')
 
-        # Créer un nouvel utilisateur avec l'ID de l'instance
-        new_user = Users(instance_id=instance_id)
+        # Créer un nouvel utilisateur avec l'ID de l'instance et le rôle conseiller
+        new_user = Users(instance_id=instance_id, role_id=counselor_role_id)
         db.session.add(new_user)
         db.session.flush()  # Flusher pour obtenir new_user.id avant le commit
 
@@ -360,8 +483,6 @@ def add_conseille():
     db.session.commit()
 
     return jsonify({'message': 'Conseillers ajoutés avec succès'}), 200
-
-
 
 def send_invitation_emailConseille(email, instance_name, new_user_id):
     try:
@@ -488,6 +609,12 @@ def president_dashboard(current_user):
     if current_user.role.name != 'président':
         return make_response({'message': 'Permission denied'}, 403)
     # Logique pour le tableau de bord du président
+    
+@app.route("/dashboardAdministration")
+@token_required
+def Administration_dashboard(current_user):
+    if current_user.role.name != 'directeur':
+        return make_response({'message': 'Permission denied'}, 403)
 
 @app.route("/superAdmin_dashboard")
 @token_required
@@ -498,7 +625,7 @@ def superAdmin_dashboard(current_user):
 @app.route("/admin_dashboard")
 @token_required
 def admin_dashboard(current_user):
-    if current_user.role.name != 'adminPublique':
+    if current_user.role.name != 'directeur':
         return make_response({'message': 'Permission denied'}, 403)
 
 
@@ -639,6 +766,139 @@ def activate_user(user_id):
 
 from sqlalchemy import text
 
+
+# -------------------------------------------ajouter administration-----------------------------------------
+@app.route('/addAdministration', methods=['POST'])
+def add_administration():
+    data = request.json
+    admin_name = data.get('admin_name')
+    director_email = data.get('director_email')
+    user_id = data.get('user_id')
+
+    if not admin_name or not director_email or not user_id:
+        print("Missing required fields")
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    try:
+        # Récupérer l'ID et le nom de l'instance de l'utilisateur
+        instance_id_response = requests.get(f'http://localhost:5000/user/{user_id}/inst')
+        print(f"Instance API response status: {instance_id_response.status_code}")
+
+        if instance_id_response.status_code == 200:
+            instance_info = instance_id_response.json()
+            print(f"Instance API response data: {instance_info}")
+
+            # Utiliser nom_instance au lieu de id si l'API ne retourne pas d'ID
+            instance_id = instance_info.get('id')
+            instance_name = instance_info.get('nom_instance')
+
+            if not instance_id:
+                print("Using 'nom_instance' as instance_id since 'id' is not found in the response")
+                instance_id = instance_name  # Assumer que nom_instance peut être utilisé comme ID
+        else:
+            print("Failed to retrieve instance information")
+            return jsonify({'error': 'Failed to retrieve instance information'}), 500
+
+        director_role = Role.query.filter_by(name='directeur').first()
+        if not director_role:
+            print('Role "directeur" not found')
+            return jsonify({'error': 'Role "directeur" not found'}), 404
+
+        new_user = Users(
+            nameAdminPublique=admin_name,
+            is_active=False,
+            role_id=director_role.id,
+            instance_id=instance_id  # Assurez-vous que instance_id est bien défini ici
+        )
+        db.session.add(new_user)
+        db.session.flush()
+        print(f"New user added with ID: {new_user.id}")
+
+        db.session.commit()
+
+        send_invitation_email_director(director_email, admin_name, new_user.id)
+        print("Invitation email sent")
+
+        return jsonify({
+            'message': 'Administration added and email sent to director successfully',
+            'instance_name': instance_name
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"Exception occurred: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+def send_invitation_email_director(director_email, admin_name, new_user_id):
+    try:
+        activation_link = f"http://localhost:3000/registerAdmin/{new_user_id}"
+
+        message_body = (f"Bienvenue en tant que directeur de l'administration '{admin_name}'.\n\n"
+                        f"Veuillez activer votre compte et compléter votre inscription en cliquant sur le lien suivant :\n"
+                        f"{activation_link}\n\n"
+                        f"Merci pour votre participation.\n\n"
+                        f"Cordialement,\nVotre application")
+
+        message = Message(subject="Invitation à rejoindre l'administration",
+                          recipients=[director_email],
+                          body=message_body)
+
+        mail.send(message)
+        print("Email sent successfully")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+
+@app.route('/registerAdmin/<int:new_user_id>', methods=['POST'])
+def register_admin(new_user_id):
+    try:
+        first_name = request.form.get('firstName')
+        last_name = request.form.get('lastName')
+        email = request.form.get('email')
+        address = request.form.get('address')
+        phone_number = request.form.get('phoneNumber')
+
+        # Vérifiez si un fichier d'avatar a été envoyé
+        if 'avatar' not in request.files:
+            return jsonify({"message": "Aucun fichier d'avatar n'a été envoyé"}), 400
+
+        avatar = request.files['avatar']
+
+        # Vérifiez si aucun fichier n'a été sélectionné
+        if avatar.filename == '':
+            return jsonify({"message": "Aucun fichier sélectionné"}), 400
+
+        # Traitez le fichier d'avatar
+        avatar_filename = secure_filename(avatar.filename)
+        avatar_path = os.path.join(app.config['UPLOAD_IMAGE'], avatar_filename)
+        avatar.save(avatar_path)
+
+      
+        existing_user = Users.query.get(new_user_id)
+        if not existing_user:
+            return jsonify({'error': 'User not found'}), 404
+
+        existing_user.firstName = first_name
+        existing_user.lastName = last_name
+        existing_user.email = email
+        existing_user.profile_image = avatar_filename
+        existing_user.address = address
+        existing_user.phoneNumber = phone_number
+        existing_user.is_active = True
+
+        db.session.commit()
+
+        return jsonify({'message': 'User registered successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
+    
+    
+    
+    
+    
+    
+    # -----------------------------------
 @app.route('/api/archived-user', methods=['GET'])
 def get_archived_users():
     try:
@@ -764,7 +1024,6 @@ def addInstance():
     ville = data.get("ville")  
     active = data.get("active")
     created_at = data.get("created_at")
-    gouvernement = data.get("gouvernement")
 
     if president_email and instance_name and ville:  
         instance = Instance.query.filter_by(president_email=president_email).first()
@@ -778,16 +1037,20 @@ def addInstance():
             ville=ville,
             active=active if active is not None else True,
             created_at=created_at,
-            gouvernement=gouvernement
         )
         db.session.add(new_instance)
         db.session.commit()
 
         instance_id = new_instance.id
+        president_role = Role.query.filter_by(name="président").first()
+
+        if president_role:
+                 president_role_id = president_role.id
 
         # Créer un nouvel enregistrement dans la classe Users avec seulement l'ID de l'instance
         new_user = Users(
-            instance_id=instance_id
+            instance_id=instance_id,
+            role_id=president_role_id
         )
         db.session.add(new_user)
         db.session.commit()
@@ -801,14 +1064,15 @@ def addInstance():
 
 
 
+
 @app.route("/instances", methods=["GET"])
 def get_all_instances():
     try:
-        instances = Instance.query.all()
+        instances = Instance.query.filter_by(archived=False).all()
+        
+        print("Filtered Instances:", instances)
 
-        print("All Instances:", instances)
-
-        serialized_instances = [instance.serialize() for instance in instances]  
+        serialized_instances = [instance.serialize() for instance in instances]
 
         return jsonify({"data": serialized_instances}), 200
 
@@ -824,8 +1088,6 @@ def update_instance(id):
     instance.president_email = data.get('president_email', instance.president_email)
     instance.nombre_conseille = data.get('nombre_conseille', instance.nombre_conseille)
     instance.ville = data.get('ville', instance.ville)
-    instance.active = data.get('active', instance.active)
-    instance.gouvernement = data.get('gouvernement',instance.gouvernement)
     db.session.commit()
     return instance.serialize(), 200
 
@@ -867,11 +1129,66 @@ def search_instance(query):
     instances = Instance.query.filter(or_(
         Instance.instance_name.ilike(f'%{query}%'),
         Instance.president_email.ilike(f'%{query}%'),
-        Instance.gouvernement.ilike(f'%{query}%'),
         Instance.ville.ilike(f'%{query}%')
     )).all()
     return instances
 
+
+@app.route('/instances/<int:instance_id>/users', methods=['GET'])
+def get_users_by_instance(instance_id):
+    users = Users.query.filter_by(instance_id=instance_id).all()
+    filtered_users = [user.serialize() for user in users if user.firstName and user.lastName and user.role_id]
+    return jsonify(filtered_users)
+
+
+@app.route("/desactiveInstances", methods=["GET"])
+def get_désactive_instances():
+    try:
+        instances = Instance.query.filter_by(archived=True).all()
+        
+        print("Filtered Instances:", instances)
+
+        serialized_instances = [instance.serialize() for instance in instances]
+
+        return jsonify({"data": serialized_instances}), 200
+
+    except Exception as e:
+        print(e)
+        return make_response({"message": f"Error: {str(e)}"}, 500)
+    
+    
+    
+@app.route('/instances/<int:instance_id>/rearchive', methods=['PUT'])
+def rearchive_instance(instance_id):
+    try:
+        instance = Instance.query.get(instance_id)
+        if instance:
+            instance.archived = False  # Modifier l'état 'archived' de l'instance
+            db.session.commit()
+            return jsonify({'message': 'Instance réarchivée avec succès'}), 200
+        else:
+            return jsonify({'message': 'Instance non trouvée'}), 404
+    except Exception as e:
+        return jsonify({'message': str(e)}), 500
+    
+    
+    
+@app.route("/instances/<int:instance_id>/disable", methods=["PUT"])
+def disable_instance(instance_id):
+    try:
+        instance = Instance.query.get(instance_id)
+        if instance:
+            instance.archived = True  # Mettre à jour la colonne "archived" à True pour indiquer l'archivage
+            db.session.commit()
+            return jsonify({"message": f"Instance with ID {instance_id} has been disabled"}), 200
+        else:
+            return jsonify({"message": f"Instance with ID {instance_id} not found"}), 404
+
+    except Exception as e:
+        print(e)
+        return make_response({"message": f"Error: {str(e)}"}, 500)
+    
+    
 
 # Route pour la recherche d'instances par n'importe quel champ
 @app.route('/instances/search', methods=['GET'])
@@ -886,7 +1203,10 @@ def search_instances():
             return jsonify({"message": "No instances found for the given query"}), 404
     else:
         return jsonify({"message": "Query parameter is required"}), 400
-
+    
+    
+    
+    
 @app.route("/roles", methods=["POST"])
 def create_role():
     try:
@@ -1538,8 +1858,6 @@ def get_archived_programmes_visite():
 # ----------------------------------------PV REUNION --------------------------------------------
 
 
-
-
 @app.route('/reunions', methods=['POST'])
 def ajouter_reunion():
     try:
@@ -1573,7 +1891,7 @@ def ajouter_reunion():
         for email in participants_emails:
             msg = Message(subject="Invitation à la réunion",
                           recipients=[email],
-                          body=f"Nous avons le plaisir de vous inviter à la réunion du conseil local  qui se tiendra le {date} à {heure} ")
+                          body=f"Nous avons le plaisir de vous inviter à la réunion du conseil local qui se tiendra le {date} à {heure} ")
             if type_reunion == 'presentielle':
                 msg.body += f"\nLieu: {lieu}"
             elif type_reunion == 'meet':
@@ -1582,9 +1900,8 @@ def ajouter_reunion():
 
         return jsonify({'message': 'Réunion ajoutée avec succès et invitations envoyées'}), 201
     except Exception as e:
+        print(f"Erreur: {str(e)}")  # Logging to the console
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
-
-
 
 
 
@@ -1592,13 +1909,23 @@ def ajouter_reunion():
 @app.route('/reunions', methods=['GET'])
 def get_reunions():
     try:
-        reunions = Reunion.query.all()
+        # Filtrer les réunions par statut "en cours" ou "prévue"
+        reunions = Reunion.query.filter(Reunion.statut.in_(['en cours', 'Prévue'])).all()
         return jsonify([reunion.serialize() for reunion in reunions]), 200
     except Exception as e:
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
 
 
+@app.route('/reunions/archive', methods=['GET'])
+def get_archived_reunions():
+    reunions = Reunion.query.filter(Reunion.statut.in_(['réalisée', 'annulée'])).all()
+    return jsonify([reunion.serialize() for reunion in reunions])
 
+
+@app.route('/reunions/archiveconseiller', methods=['GET'])
+def get_archived_reunionsConseiller():
+    reunions = Reunion.query.filter(Reunion.statut.in_(['réalisée', 'Prévue', 'en cours'])).all()
+    return jsonify([reunion.serialize() for reunion in reunions])
 
 
 
@@ -1627,10 +1954,42 @@ def update_presence(reunion_id, user_id):
 def update_reunion_status(reunion_id):
     data = request.get_json()
     reunion = Reunion.query.get(reunion_id)
+    
+    if not reunion:
+        return jsonify({'error': 'Réunion non trouvée'}), 404
+
     if 'statut' in data:
-        reunion.statut = data['statut']
-    db.session.commit()
-    return jsonify(reunion.serialize())
+        new_statut = data['statut']
+        current_statut = reunion.statut
+        
+        # Vérification des transitions de statut valides
+        valid_transitions = {
+            'Prévue': ['en cours', 'annulée'],
+            'en cours': ['réalisée'],
+            'annulée': [],
+            'réalisée': []
+        }
+        
+        if new_statut not in valid_transitions.get(current_statut, []):
+            return jsonify({'error': f'La transition de {current_statut} à {new_statut} n\'est pas autorisée'}), 400
+
+        # Mettre à jour le statut de la réunion
+        reunion.statut = new_statut
+
+        db.session.commit()
+        return jsonify(reunion.serialize()), 200
+
+    return jsonify({'error': 'Le statut est requis'}), 400
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1744,6 +2103,489 @@ def delete_pv(reunion_id):
     except Exception as e:
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
     
+    
+    
+    
+    
+# ------------------------------------demande acces information -----------------------------------------------------
+
+
+
+
+
+@app.route('/directeurs', methods=['GET'])
+def directeurs():
+    # Récupérer le rôle de directeur
+    role_directeur = Role.query.filter_by(name='directeur').first()
+    if not role_directeur:
+        return jsonify({'message': 'Le rôle de directeur n\'a pas été trouvé'}), 404
+    
+    # Récupérer tous les utilisateurs ayant le rôle de directeur
+    directeurs = Users.query.filter_by(role_id=role_directeur.id).all()
+    
+    # Sérialiser les données des directeurs
+    directeurs_data = [{
+        "id": directeur.id,
+        "nameAdminPublique": directeur.nameAdminPublique
+        # Ajoutez d'autres champs si nécessaire
+    } for directeur in directeurs]
+    
+    return jsonify(directeurs_data)
+
+
+
+
+@app.route('/demande/acces', methods=['POST'])
+def create_demande_acces():
+    print("Route /demande/acces atteinte")
+    data = request.json
+    titre = data.get('titre')
+    description = data.get('description')
+    citoyen_email = data.get('citoyenEmail')
+    nom_citoyen = data.get('nomCitoyen')
+    prenom_citoyen = data.get('prenomCitoyen')
+    conseiller_id = data.get('conseillerId')
+    directeur_id = data.get('directeurId')
+
+    conseiller = Users.query.get(conseiller_id)
+    directeur = Users.query.get(directeur_id)
+    
+    if not conseiller or not directeur:
+        return jsonify({'message': 'Conseiller ou directeur non trouvé'}), 404
+
+    nouvelle_demande = DemandeAccesInfo(
+        titre=titre,
+        description=description,
+        citoyen_email=citoyen_email,
+        nom_citoyen=nom_citoyen,
+        prenom_citoyen=prenom_citoyen,
+        nom_conseiller=f"{conseiller.firstName} {conseiller.lastName}",
+        nom_administration=f"{directeur.firstName} {directeur.lastName}",
+        user_id=conseiller.id,
+        directeur_id=directeur.id
+    )
+
+    try:
+        db.session.add(nouvelle_demande)
+        db.session.commit()
+        return jsonify(nouvelle_demande.serialize()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Erreur lors de la création de la demande', 'error': str(e)}), 500
+
+
+
+
+@app.route('/demande/conseiller/<int:user_id>', methods=['GET'])
+def demande_conseiller(user_id):
+    # Vérifier si l'utilisateur est un conseiller
+    conseiller = Users.query.filter_by(id=user_id, role_id=1).first()
+    if not conseiller:
+        return jsonify({'message': 'Utilisateur non trouvé ou n\'est pas un conseiller'}), 404
+    
+    # Récupérer les demandes d'accès à l'information associées à ce conseiller
+    demandes = DemandeAccesInfo.query.filter_by(user_id=user_id).all()
+    
+    # Sérialiser les données des demandes d'accès à l'information
+    demandes_data = [{
+        "id": demande.id,
+        "titre": demande.titre,
+        "description": demande.description,
+        "citoyen_email": demande.citoyen_email,
+        "nom_citoyen": demande.nom_citoyen,
+        "prenom_citoyen": demande.prenom_citoyen,
+        "nom_administration": demande.nom_administration,
+        "created_at": demande.created_at,
+        # Utiliser la photo de profil du citoyen
+        "citoyen_photo": url_for('static', filename=f'uploads/{demande.user.profile_image}', _external=True),
+        # Utiliser le nom et le prénom du citoyen
+        "citoyen_first_name": demande.user.firstName,
+        "citoyen_last_name": demande.user.lastName,
+    } for demande in demandes]
+    
+    return jsonify(demandes_data)
+
+
+
+@app.route('/demande/conseiller/<int:user_id>/<int:demande_id>', methods=['DELETE'])
+def effacer_demande_conseiller(user_id, demande_id):
+    # Vérifier si l'utilisateur est un conseiller
+    conseiller = Users.query.filter_by(id=user_id, role_id=1).first()
+    if not conseiller:
+        return jsonify({'message': 'Utilisateur non trouvé ou n\'est pas un conseiller'}), 404
+
+    # Vérifier si la demande appartient à ce conseiller
+    demande = DemandeAccesInfo.query.filter_by(id=demande_id, user_id=user_id).first()
+    if not demande:
+        return jsonify({'message': 'Demande non trouvée ou n\'appartient pas à ce conseiller'}), 404
+
+    # Supprimer la demande
+    db.session.delete(demande)
+    db.session.commit()
+
+    return jsonify({'message': 'Demande effacée avec succès'})
+
+
+
+
+
+@app.route('/demande/conseiller/<int:user_id>/<int:demande_id>/accepter', methods=['PUT'])
+def accepter_demande(user_id, demande_id):
+    # Vérifier si l'utilisateur est un conseiller
+    conseiller = Users.query.filter_by(id=user_id, role_id=1).first()
+    if not conseiller:
+        return jsonify({'message': 'Utilisateur non trouvé ou n\'est pas un conseiller'}), 404
+
+    # Vérifier si la demande appartient à ce conseiller
+    demande = DemandeAccesInfo.query.get(demande_id)
+    if not demande or demande.user_id != user_id:
+        return jsonify({'message': 'Demande non trouvée ou n\'appartient pas à ce conseiller'}), 404
+
+    # Marquer la demande comme acceptée
+    demande.acceptee = True
+    db.session.commit()
+
+    return jsonify({'message': 'Demande acceptée avec succès'}), 200
+
+
+@app.route('/demande/directeur/<int:user_id>', methods=['GET'])
+def demande_directeur(user_id):
+    # Vérifier si l'utilisateur est un directeur
+    directeur = Users.query.filter_by(id=user_id, role_id=2).first()
+    if not directeur:
+        return jsonify({'message': 'Utilisateur non trouvé ou n\'est pas un directeur'}), 404
+
+    # Récupérer toutes les demandes d'accès à l'information associées à ce directeur
+    demandes = DemandeAccesInfo.query.filter_by(directeur_id=user_id).all()
+    
+    # Vérifiez les demandes récupérées
+    print(f"Demandes récupérées pour le directeur {user_id}: {demandes}")
+
+    # Sérialiser les données des demandes d'accès à l'information
+    demandes_data = [{
+        "id": demande.id,
+        "titre": demande.titre,
+        "description": demande.description,
+        "citoyen_email": demande.citoyen_email,
+        "nom_citoyen": demande.nom_citoyen,
+        "prenom_citoyen": demande.prenom_citoyen,
+        "nom_conseiller": demande.nom_conseiller,
+        "nom_administration": demande.nom_administration,
+        "created_at": demande.created_at.strftime('%Y-%m-%d %H:%M:%S'),  # Formatage de la date de création
+        "statut": demande.statut,
+        "reponse": demande.reponse,
+    } for demande in demandes]
+    
+    # Afficher les données des demandes sérialisées
+    print(f"Demandes sérialisées: {demandes_data}")
+    
+    return jsonify(demandes_data)
+
+
+
+
+
+@app.route('/demande/repondre/<int:demande_id>', methods=['POST'])
+def repondre_demande(demande_id):
+    data = request.json
+    reponse = data.get('reponse')
+
+    # Vérifier si la demande existe
+    demande = DemandeAccesInfo.query.get(demande_id)
+    if not demande:
+        return jsonify({'message': 'Demande non trouvée'}), 404
+
+    # Mettre à jour la demande avec la réponse et changer le statut
+    demande.reponse = reponse
+    demande.statut = True  # Mettre le statut à public
+
+    try:
+        db.session.commit()
+        return jsonify(demande.serialize()), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Erreur lors de la mise à jour de la demande', 'error': str(e)}), 500
+
+
+
+
+@app.route('/demande/statut/true', methods=['GET'])
+def get_demandes_with_statut_true():
+    try:
+        # Récupérer toutes les demandes d'accès à l'information ayant statut = True
+        demandes = DemandeAccesInfo.query.filter_by(statut=True).all()
+        
+        # Sérialiser les données des demandes
+        demandes_data = [demande.serialize() for demande in demandes]
+        
+        return jsonify(demandes_data), 200
+    except Exception as e:
+        return jsonify({'message': 'Erreur lors de la récupération des demandes', 'error': str(e)}), 500
+
+
+
+
+@app.route('/demande/<int:demande_id>', methods=['GET'])
+def get_demande(demande_id):
+    try:
+        # Récupérer la demande spécifique par ID
+        demande = DemandeAccesInfo.query.get(demande_id)
+        
+        if not demande:
+            return jsonify({'message': 'Demande non trouvée'}), 404
+        
+        # Sérialiser les données de la demande
+        demande_data = demande.serialize()
+        
+        return jsonify(demande_data), 200
+    except Exception as e:
+        return jsonify({'message': 'Erreur lors de la récupération de la demande', 'error': str(e)}), 500
+
+
+@app.route('/demande/<int:demande_id>/reponse', methods=['GET', 'POST'])
+def demande_reponse(demande_id):
+    demande = DemandeAccesInfo.query.get(demande_id)
+    if request.method == 'POST':
+        if demande.reponse:
+            return jsonify({'message': 'Une réponse existe déjà pour cette demande'}), 400
+        data = request.json
+        reponse = data.get('reponse')
+        demande.reponse = reponse
+        db.session.commit()
+        return jsonify({'message': 'Réponse ajoutée avec succès'}), 201
+    else:  # GET request
+        if demande.reponse:
+            return jsonify({'reponse': demande.reponse}), 200
+        else:
+            return jsonify({'message': 'Aucune réponse trouvée pour cette demande'}), 404
+
+
+
+
+from datetime import datetime
+
+
+# -----------------------archiver demande ---------------------------------
+
+@app.route('/demande/conseiller/<int:user_id>/<int:demande_id>/archiver', methods=['PUT'])
+def archiver_demande(user_id, demande_id):
+    # Vérifier si la demande existe et appartient à l'utilisateur
+    demande = DemandeAccesInfo.query.filter_by(id=demande_id, user_id=user_id).first()
+    if not demande:
+        return jsonify({"error": "Demande not found or does not belong to the user"}), 404
+    
+    # Mettre à jour le statut de la demande
+    demande.is_archived = True
+    
+    try:
+        # Commit des changements à la base de données
+        db.session.commit()
+        return jsonify({"message": "Demande archivée avec succès"}), 200
+    except Exception as e:
+        # En cas d'erreur lors de la mise à jour de la demande
+        db.session.rollback()
+        return jsonify({"error": "Erreur lors de l'archivage de la demande", "details": str(e)}), 500
+    
+    
+    
+    
+@app.route('/archive_demande/<int:demande_id>', methods=['POST'])
+def archive_demande(demande_id):
+    demande = DemandeAccesInfo.query.get(demande_id)
+    if demande is None:
+        return jsonify({'message': 'Demande not found'}), 404
+    
+    demande.is_archived = True
+    db.session.commit()
+    return jsonify({'message': 'Demande archived successfully'}), 200
+
+
+
+
+@app.route('/demande/conseillerff/<int:user_id>')
+def get_demandes_conseiller(user_id):
+    demandes_non_archivees = DemandeAccesInfo.query.filter_by(user_id=user_id, is_archived=False, acceptee=False).all()
+    return jsonify([demande.serialize() for demande in demandes_non_archivees])
+
+@app.route('/api/demande_archivee')
+def get_demandes_archivees():
+    demandes_archivees = DemandeAccesInfo.query.filter_by(is_archived=True).all()
+    print(demandes_archivees)  # Vérifiez la sortie dans la console Flask
+    return jsonify([demande.serialize() for demande in demandes_archivees])
+
+
+
+# Route pour désarchiver une demande spécifique
+@app.route('/api/demande/<int:demande_id>/desarchiver', methods=['PUT'])
+def desarchiver_demande(demande_id):
+    demande = DemandeAccesInfo.query.get(demande_id)
+    if not demande:
+        return jsonify({'message': 'Demande non trouvée'}), 404
+    
+    # Assurez-vous que la demande est actuellement archivée
+    if not demande.is_archived:
+        return jsonify({'message': 'La demande n\'est pas archivée'}), 400
+    
+    # Désarchiver la demande
+    demande.is_archived = False
+    db.session.commit()
+    
+    return jsonify({'message': 'Demande désarchivée avec succès'}), 200
+
+
+
+# ----------------------------------plainte --------------------------------
+
+
+
+
+
+
+@app.route('/demande/conseillers', methods=['GET'])
+def demande_conseillers():
+    # Récupérer le rôle de conseiller
+    role_conseiller = Role.query.filter_by(name='conseiller').first()
+    if not role_conseiller:
+        return jsonify({'message': 'Le rôle de conseiller n\'a pas été trouvé'}), 404
+    
+    # Récupérer tous les utilisateurs ayant le rôle de conseiller
+    conseillers = Users.query.filter_by(role_id=role_conseiller.id).all()
+    
+    # Sérialiser les données des conseillers
+    conseillers_data = [{
+        "id": conseiller.id,
+        "firstName": conseiller.firstName,
+        "lastName": conseiller.lastName,
+        "email": conseiller.email,
+        # Ajoutez d'autres champs si nécessaire
+    } for conseiller in conseillers]
+    
+    return jsonify(conseillers_data)
+
+@app.route('/plainte_proposition', methods=['POST'])
+def create_Plainte_Proposition():
+    data = request.json
+    titre = data.get('titre')
+    description = data.get('description')
+    citoyen_email = data.get('citoyenEmail')
+    nom_citoyen = data.get('nomCitoyen')
+    prenom_citoyen = data.get('prenomCitoyen')
+    conseiller_id = data.get('conseillerId')
+
+    # Vérifier si le conseiller existe
+    conseiller = Users.query.get(conseiller_id)
+    if not conseiller:
+        return jsonify({'message': 'Conseiller non trouvé'}), 404
+
+    # Créer une nouvelle plainte par défaut
+    nouvelle_plainte = Plainte(
+        titre=titre,
+        description=description,
+        citoyen_email=citoyen_email,
+        nom_citoyen=nom_citoyen,
+        prenom_citoyen=prenom_citoyen,
+        nom_conseiller=f"{conseiller.firstName} {conseiller.lastName}",
+        user_id=conseiller.id,
+        type=True  # Par défaut, une plainte
+    )
+
+    try:
+        db.session.add(nouvelle_plainte)
+        db.session.commit()
+        return jsonify(nouvelle_plainte.serialize()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Erreur lors de la création de la plainte', 'error': str(e)}), 500
+
+
+@app.route('/plaintes', methods=['GET'])
+def get_plaintes():
+    try:
+        plaintes = Plainte.query.all()
+        plaintes_data = [plainte.serialize() for plainte in plaintes]
+        return jsonify(plaintes_data), 200
+    except Exception as e:
+        return jsonify({'message': 'Erreur lors de la récupération des plaintes', 'error': str(e)}), 500
+
+
+
+
+
+@app.route('/plaintes/<int:plainte_id>/archiver', methods=['POST'])
+def archiver_plainte(plainte_id):
+    plainte = Plainte.query.get(plainte_id)
+    if not plainte:
+        return jsonify({'message': 'Plainte non trouvée'}), 404
+    
+    plainte.is_archived = True
+    try:
+        db.session.commit()
+        return jsonify({'message': 'Plainte archivée avec succès'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'message': 'Erreur lors de l\'archivage de la plainte', 'error': str(e)}), 500
+
+
+
+
+@app.route('/plaintes/archives', methods=['GET'])
+def lister_plaintes_archives():
+    plaintes_archives = Plainte.query.filter_by(is_archived=True).all()
+    plaintes_serialized = [plainte.serialize() for plainte in plaintes_archives]
+    return jsonify(plaintes_serialized)
+
+
+
+@app.route('/plaintes/nonArchives', methods=['GET'])
+def lister_plaintes_noarchives():
+    plaintes_archives = Plainte.query.filter_by(is_archived=False).all()
+    plaintes_serialized = [plainte.serialize() for plainte in plaintes_archives]
+    return jsonify(plaintes_serialized)
+
+@app.route('/plaintes/<int:plainte_id>/rearchive', methods=['PUT'])
+def rearchive_plainte(plainte_id):
+    plainte = Plainte.query.get_or_404(plainte_id)
+    plainte.is_archived = False
+    db.session.commit()
+    return jsonify({'message': 'Plainte ré-archivée avec succès'}), 200
+
+
+
+
+@app.route('/plaintes/<int:id>/repondre', methods=['PUT'])
+def repondre_plainte(id):
+    plainte = Plainte.query.get(id)
+    if not plainte:
+        return jsonify({'message': 'Plainte non trouvée'}), 404
+    
+    reponse = request.json.get('reponse')
+    if not reponse:
+        return jsonify({'message': 'Le champ de réponse est requis'}), 400
+    
+    plainte.reponse = reponse
+    db.session.commit()
+    
+    return jsonify({'message': 'Réponse modifiée avec succès'}), 200
+
+
+
+@app.route('/hierarchy', methods=['GET'])
+def get_hierarchy():
+    def serialize_user(user):
+        user_data = user.serialize()
+        children = Users.query.filter_by(role_id=user.role_id).filter(Users.id != user.id).all()
+        user_data['children'] = [serialize_user(child) for child in children]
+        return user_data
+    
+    president = Users.query.join(Role).filter(Role.name == 'président').first()
+    if president:
+        data = serialize_user(president)
+    else:
+        data = []
+    
+    return jsonify(data)
+
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
