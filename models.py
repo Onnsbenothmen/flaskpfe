@@ -27,6 +27,17 @@ class Users(db.Model):
     is_archived = db.Column(db.Boolean, default=False)  # Nouveau champ pour indiquer si l'utilisateur est archivé
     is_active = db.Column(db.Boolean, default=False)  # Champ pour indiquer si l'utilisateur est actif
     reunions = db.relationship('UserReunion', back_populates='user')
+    demandes_acces_info = db.relationship('DemandeAccesInfo', back_populates='user', foreign_keys='DemandeAccesInfo.user_id', cascade='all, delete-orphan')
+    demandes_acces_info_directeur = db.relationship('DemandeAccesInfo', foreign_keys='DemandeAccesInfo.directeur_id', back_populates='directeur')
+    Plainte = db.relationship('Plainte', back_populates='user', foreign_keys='Plainte.user_id', cascade='all, delete-orphan')
+    Proposition = db.relationship('Proposition', back_populates='user', foreign_keys='Proposition.user_id', cascade='all, delete-orphan')
+    birth_date = db.Column(db.Date, nullable=True)  # Champ pour la date de naissance
+    cin = db.Column(db.String(20), unique=True, nullable=True)  # Champ pour le CIN
+    situation_familiale = db.Column(db.String(100), nullable=True)  # Champ pour l'état
+    ville = db.Column(db.String(100), nullable=True)  # Pas de virgule ici
+    linkedin = db.Column(db.String(255))  # Pas de virgule ici
+    lienFacebook = db.Column(db.String(255))  # Pas de virgule ici
+    description_profil = db.Column(db.String(500))  # Pas de virgule ici
     
     def __repr__(self):
         return f'<User {self.firstName} {self.id}>'
@@ -35,6 +46,8 @@ class Users(db.Model):
         role_name = self.role.name if self.role else None
         instance_name = self.instance.instance_name if self.instance else None
         nb_conseilles = self.instance.nombre_conseille if self.instance else None
+        created_at_formatted = self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None
+        birth_date = self.birth_date.strftime('%a, %d %b %Y %H:%M:%S GMT') if self.birth_date else None
 
         return {
             "id": self.id,
@@ -42,24 +55,160 @@ class Users(db.Model):
             "lastName": self.lastName,
             "email": self.email,
             "role_name": role_name,
-            "created_at": self.created_at,
+            "created_at":  created_at_formatted,
             "profile_image": self.profile_image,
             "nameAdminPublique": self.nameAdminPublique,
             "phoneNumber": self.phoneNumber,  # Ajout du numéro de téléphone
             "address": self.address, # Ajout de l'adresse
             "is_archived": self.is_archived,
             "instance_name": instance_name,
-            "nb_conseilles": nb_conseilles  # Ajoutez le nombre de conseillers à la sérialisation de l'utilisateur
+            "birth_date": birth_date,  # Ajout de la date de naissance
+            "nb_conseilles": nb_conseilles,  # Ajoutez le nombre de conseillers à la sérialisation de l'utilisateur
+            "situation_familiale": self.situation_familiale,  # Ajout de l'état
+
+            "cin": self.cin,  # Ajout du CIN
+            "ville": self.ville,  # Ajout de la ville
+            "linkedin": self.linkedin,  # Ajout de l'URL LinkedIn
+            "lienFacebook": self.lienFacebook,  # Ajout de l'URL Facebook
+            "description_profil": self.description_profil  # Ajout de la description de profil
         }
+        
+
+       
+
+
+       
+class Plainte(db.Model):
+    __tablename__ = 'Plainte'
+    id = db.Column(db.Integer, primary_key=True)
+    titre = db.Column(db.String(500))
+    description = db.Column(db.String(500), nullable=False)
+    citoyen_email = db.Column(db.String(100), nullable=False)
+    nom_citoyen = db.Column(db.String(500))
+    prenom_citoyen = db.Column(db.String(500))
+    nom_conseiller = db.Column(db.String(100), nullable=False)
+    statut = db.Column(db.Boolean, default=False) 
+    reponse = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+    user_id = db.Column(db.Integer, db.ForeignKey('Users.id'), nullable=False)
+    user = db.relationship('Users', foreign_keys=[user_id], back_populates='Plainte')
+    is_archived = db.Column(db.Boolean, default=False)
+    type = db.Column(db.Boolean)
+
+    def serialize(self):    
+        return {
+            'id': self.id,
+            'titre': self.titre,
+            'description': self.description,
+            'citoyen_email': self.citoyen_email,
+            'nom_citoyen': self.nom_citoyen,
+            'prenom_citoyen':self.prenom_citoyen,
+            'nom_conseiller': self.nom_conseiller,
+            'statut':self.statut,
+            'reponse':self.reponse,
+            'created_at': self.created_at,
+            'user_id': self.user_id,
+            'is_archived': self.is_archived,
+            'type': self.type
+
+        }
+        
+        
+
+class Proposition(db.Model):
+    __tablename__ = 'Proposition'
+    id = db.Column(db.Integer, primary_key=True)
+    titre = db.Column(db.String(500))
+    description = db.Column(db.String(500), nullable=False)
+    citoyen_email = db.Column(db.String(100), nullable=False)
+    nom_citoyen = db.Column(db.String(500))
+    prenom_citoyen = db.Column(db.String(500))
+    nom_conseiller = db.Column(db.String(100), nullable=False)
+    statut = db.Column(db.Boolean, default=False) 
+    reponse = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+    user_id = db.Column(db.Integer, db.ForeignKey('Users.id'), nullable=False)
+    user = db.relationship('Users', foreign_keys=[user_id], back_populates='Proposition')
+    is_archived = db.Column(db.Boolean, default=False)
+    type = db.Column(db.Boolean)
+
+    def serialize(self):    
+        return {
+            'id': self.id,
+            'titre': self.titre,
+            'description': self.description,
+            'citoyen_email': self.citoyen_email,
+            'nom_citoyen': self.nom_citoyen,
+            'prenom_citoyen':self.prenom_citoyen,
+            'nom_conseiller': self.nom_conseiller,
+            'statut':self.statut,
+            'reponse':self.reponse,
+            'created_at': self.created_at,
+            'user_id': self.user_id,
+            'is_archived': self.is_archived,
+            'type': self.type
+
+        }
+        
+        
+        
+        
+class DemandeAccesInfo(db.Model):
+    __tablename__ = 'demande_acces_info'
+    id = db.Column(db.Integer, primary_key=True)
+    titre = db.Column(db.String(500))
+    description = db.Column(db.String(500), nullable=False)
+    citoyen_email = db.Column(db.String(100), nullable=False)
+    nom_citoyen = db.Column(db.String(500))
+    prenom_citoyen = db.Column(db.String(500))
+    acceptee = db.Column(db.Boolean, default=False) 
+    nom_conseiller = db.Column(db.String(100), nullable=False)
+    nom_administration = db.Column(db.String(100), nullable=False)
+    statut = db.Column(db.Boolean, default=False) 
+    reponse = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+    user_id = db.Column(db.Integer, db.ForeignKey('Users.id'), nullable=False)
+    directeur_id = db.Column(db.Integer, db.ForeignKey('Users.id'), nullable=True)
+    user = db.relationship('Users', foreign_keys=[user_id], back_populates='demandes_acces_info')
+    directeur = db.relationship('Users', foreign_keys=[directeur_id], back_populates='demandes_acces_info_directeur')
+    is_archived = db.Column(db.Boolean, default=False)
+
+
+
+    def serialize(self):
+        return {
+            'id': self.id,
+            'titre': self.titre,
+            'description': self.description,
+            'citoyen_email': self.citoyen_email,
+            'nom_citoyen': self.nom_citoyen,
+            'prenom_citoyen':self.prenom_citoyen,
+            'acceptee':self.acceptee,
+            'nom_conseiller': self.nom_conseiller,
+            'nom_administration': self.nom_administration,
+            'statut':self.statut,
+            'reponse':self.reponse,
+            'created_at': self.created_at,
+            'user_id': self.user_id,
+            'directeur_id': self.directeur_id,
+            'is_archived': self.is_archived
+        }
+
+
+
+
+        
+        
+        
 class Instance(db.Model):
     __tablename__ = "instances"
     id = db.Column(db.Integer, primary_key=True)
     instance_name = db.Column(db.String(100), nullable=False)
     president_email = db.Column(db.String(100), nullable=False)
     nombre_conseille = db.Column(db.Integer)  # Ajout de la colonne pour le nombre de conseillers
-    gouvernement = db.Column(db.String(100))  # Ajout de la colonne pour le gouvernement
     ville = db.Column(db.String(100), nullable=False)
     active = db.Column(db.Boolean, default=True)
+    archived = db.Column(db.Boolean, default=False)  # Nouvelle colonne pour indiquer si l'instance est archivée
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     users = db.relationship('Users', back_populates='instance')
 
@@ -70,20 +219,20 @@ class Instance(db.Model):
             "instance_name": self.instance_name,
             "president_email": self.president_email,
             "nombre_conseille": self.nombre_conseille,  # Ajout du nombre de conseillers
-            "gouvernement": self.gouvernement,  # Ajout du gouvernement
             "ville": self.ville,
             "active": self.active,
+            "archived": self.archived,  # Ajout de la colonne "archived" à la sérialisation
             "created_at": self.created_at,
         }
 
-# class SentEmail(db.Model):
-#     __tablename__ = 'sent_emails'
+class SentEmail(db.Model):
+    __tablename__ = 'sent_emails'
 
-#     id = db.Column(db.Integer, primary_key=True)
-#     president_email = db.Column(db.String(255), nullable=False)
-#     subject = db.Column(db.String(255), nullable=False)
-#     body = db.Column(db.Text, nullable=False)
-#     sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    id = db.Column(db.Integer, primary_key=True)
+    president_email = db.Column(db.String(255), nullable=False)
+    subject = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    sent_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
 class ArchivedUser(db.Model):
@@ -131,7 +280,7 @@ class ProgrammeVisite(db.Model):
     documents_joints = db.Column(db.String(500))  
     user_id = db.Column(db.Integer, db.ForeignKey("Users.id"))
     conseiller_email = db.Column(db.String(100))  
-    statut = db.Column(db.String(20))
+    statut = db.Column(db.String(50), default='Prévue', server_default='Prévue')  # Définir le statut par défaut
     admin_email = db.Column(db.String(100))
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     user = db.relationship('Users', back_populates='programmes_visite')
@@ -194,7 +343,7 @@ class Reunion(db.Model):
     heure = db.Column(db.Time)
     lieu = db.Column(db.String(250))
     ordre_du_jour = db.Column(db.Text)
-    statut = db.Column(db.String(50))
+    statut = db.Column(db.String(50), default='Prévue', server_default='Prévue')  # Définir le statut par défaut
     pv_path = db.Column(db.String(250))
     users = db.relationship('UserReunion', back_populates='reunion')
 
