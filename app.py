@@ -27,8 +27,13 @@ from io import BytesIO
 from itsdangerous import URLSafeTimedSerializer
 from flask import send_from_directory
 
+# CORS(app, supports_credentials=True)
 
+<<<<<<< HEAD
 #app = Flask(__name__)
+=======
+# app = Flask(__name__)
+>>>>>>> d11118a035082fbf286dd189beec99e92f0c043f
 CORS(app, supports_credentials=True)
 
 # Définition du dossier de téléchargement des fichiers
@@ -229,6 +234,11 @@ def get_list_conseillers():
         return jsonify([user.serialize() for user in conseillers])
     else:
         return jsonify({"error": "Role 'conseiller' not found"}), 404
+<<<<<<< HEAD
+=======
+    
+    
+>>>>>>> d11118a035082fbf286dd189beec99e92f0c043f
 
 @app.route('/getlistAdministrations')
 def get_list_Administration():
